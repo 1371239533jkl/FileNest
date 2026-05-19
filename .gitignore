@@ -1,0 +1,21 @@
+# 环境变量配置（包含敏感信息）
+.env
+
+# 日志目录
+logs/
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# IDE 配置
+.vs/
+.vscode/
+.idea/
+
+# 系统文件
+Thumbs.db
+.DS_Store

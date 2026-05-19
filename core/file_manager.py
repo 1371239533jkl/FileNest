@@ -1,0 +1,232 @@
+"""
+文件操作管理 - 重命名、移动、删除
+"""
+import os
+import shutil
+import uuid
+from pathlib import Path
+from datetime import datetime
+from typing import Optional, Tuple
+
+import send2trash
+
+from config import DEFAULT_RENAME_PATTERN, FILE_TYPE_NAMES
+from database.db_manager import db
+from database.models import FileDAO, OperationHistoryDAO
+from utils.date_utils import parse_datetime_safe
+from utils.logger import logger
+
+
+class FileManager:
+    """文件操作管理器"""
+
+    def __init__(self):
+        self.file_dao = FileDAO(db)
+        self.history_dao = OperationHistoryDAO(db)
+
+    def rename_file(self, file_id: int, new_name: Optional[str] = None,
+                    pattern: Optional[str] = None, batch_id: Optional[str] = None) -> Optional[int]:
+        """重命名文件
+        new_name: 直接指定新文件名
+        pattern: 使用模板生成新文件名
+        """
+        record = self.file_dao.get_by_id(file_id)
+        if not record:
+            raise ValueError(f"文件记录不存在: id={file_id}")
+
+        old_path = record.get('file_path')
+        if not old_path or not isinstance(old_path, str):
+            raise ValueError(f"文件路径无效: id={file_id}")
+        if not os.path.exists(old_path):
+            raise FileNotFoundError(f"文件不存在: {old_path}")
+
+        old_name = record['file_name']
+
+        if new_name is None:
+            if pattern is None:
+                pattern = DEFAULT_RENAME_PATTERN
+            new_name = self._generate_name(record, pattern)
+
+        # 确保扩展名一致
+        old_ext = record['file_extension']
+        if not new_name.lower().endswith(old_ext.lower()):
+            new_name = new_name + old_ext
+
+        # 构建新路径
+        parent = os.path.dirname(old_path)
+        new_path = os.path.join(parent, new_name)
+
+        # 避免覆盖
+        new_path = self._ensure_unique_path(new_path)
+        new_name = os.path.basename(new_path)
+
+        # 路径安全校验：确保新文件未逃逸出父目录
+        self._validate_path_safety(parent, new_path, "重命名")
+
+        if old_path == new_path:
+            return None
+
+        # 执行重命名
+        try:
+            os.rename(old_path, new_path)
+        except OSError as e:
+            logger.error(f"重命名文件失败: {old_path} -> {new_path}, 错误: {e}")
+            raise RuntimeError(f"重命名失败: {e}") from e
+
+        # 更新数据库
+        self.file_dao.update_name(file_id, new_name, new_path)
+        if not record.get('original_name'):
+            db.execute_update(
+                "UPDATE files SET original_name = %s WHERE id = %s",
+                (old_name, file_id))
+
+        # 记录操作历史
+        op_id = self.history_dao.insert(
+            'rename', file_id, old_path, new_path, batch_id=batch_id)
+
+        logger.info(f"重命名: {old_name} -> {new_name}")
+        return op_id
+
+    def batch_rename(self, file_ids: list, pattern: Optional[str] = None) -> Tuple[str, dict]:
+        """批量重命名"""
+        batch_id = str(uuid.uuid4())[:8]
+        results = {'success': 0, 'failed': 0, 'errors': []}
+
+        for fid in file_ids:
+            try:
+                self.rename_file(fid, pattern=pattern, batch_id=batch_id)
+                results['success'] += 1
+            except Exception as e:
+                results['failed'] += 1
+                results['errors'].append(f"ID {fid}: {e}")
+                logger.warning(f"批量重命名失败 ID={fid}: {e}")
+
+        return batch_id, results
+
+    def move_file(self, file_id: int, target_dir: str,
+                  batch_id: Optional[str] = None) -> Optional[int]:
+        """移动文件到目标目录"""
+        record = self.file_dao.get_by_id(file_id)
+        if not record:
+            raise ValueError(f"文件记录不存在: id={file_id}")
+
+        old_path = record.get('file_path')
+        if not old_path or not isinstance(old_path, str):
+            raise ValueError(f"文件路径无效: id={file_id}")
+        if not os.path.exists(old_path):
+            raise FileNotFoundError(f"文件不存在: {old_path}")
+
+        os.makedirs(target_dir, exist_ok=True)
+        new_path = os.path.join(target_dir, record['file_name'])
+        new_path = self._ensure_unique_path(new_path)
+
+        # 路径安全校验：确保目标文件未逃逸出 target_dir
+        self._validate_path_safety(target_dir, new_path, "移动")
+
+        try:
+            shutil.move(old_path, new_path)
+        except OSError as e:
+            logger.error(f"移动文件失败: {old_path} -> {new_path}, 错误: {e}")
+            raise RuntimeError(f"移动失败: {e}") from e
+
+        new_name = os.path.basename(new_path)
+        self.file_dao.update_name(file_id, new_name, new_path)
+
+        op_id = self.history_dao.insert(
+            'move', file_id, old_path, new_path, batch_id=batch_id)
+
+        logger.info(f"移动: {old_path} -> {new_path}")
+        return op_id
+
+    def delete_file(self, file_id: int, batch_id: Optional[str] = None) -> Optional[int]:
+        """删除文件（送回收站 + 标记数据库）"""
+        record = self.file_dao.get_by_id(file_id)
+        if not record:
+            raise ValueError(f"文件记录不存在: id={file_id}")
+
+        old_path = record['file_path']
+        try:
+            if os.path.exists(old_path):
+                send2trash.send2trash(old_path)
+        except Exception as e:
+            logger.warning(f"送回收站失败 (可能文件已被删除): {old_path}, 错误: {e}")
+            # 即使送回收站失败，也继续标记数据库
+
+        self.file_dao.update_status(file_id, 'deleted')
+
+        op_id = self.history_dao.insert(
+            'delete', file_id, old_path, None, batch_id=batch_id)
+
+        logger.info(f"删除（进回收站）: {old_path}")
+        return op_id
+
+    def permanent_delete(self, file_id: int, batch_id: Optional[str] = None) -> None:
+        """永久删除文件"""
+        record = self.file_dao.get_by_id(file_id)
+        if not record:
+            raise ValueError(f"文件记录不存在: id={file_id}")
+
+        file_path = record['file_path']
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        except Exception as e:
+            logger.warning(f"永久删除文件失败 (可能文件已被删除): {file_path}, 错误: {e}")
+            raise RuntimeError(f"永久删除失败: {e}") from e
+
+        self.file_dao.update_status(file_id, 'deleted')
+        self.history_dao.insert(
+            'delete', file_id, file_path, None,
+            batch_id=batch_id)
+        self.history_dao.insert(
+            'delete', file_id, file_path, 'permanent',
+            batch_id=batch_id)
+
+        logger.info(f"永久删除: {file_path}")
+
+    @staticmethod
+    def _validate_path_safety(expected_base: str, target_path: str, operation_name: str) -> None:
+        """校验目标路径是否在预期的基础目录内，防止路径遍历攻击"""
+        base_real = os.path.realpath(expected_base)
+        target_real = os.path.realpath(target_path)
+        if os.path.commonpath([base_real, target_real]) != base_real:
+            raise PermissionError(
+                f"[安全拦截] {operation_name}操作检测到路径逃逸风险："
+                f"{target_path} 不在允许目录 {expected_base} 内"
+            )
+
+    def _generate_name(self, record: dict, pattern: str) -> str:
+        """根据模板生成文件名"""
+        mtime = record.get('modify_time') or record.get('create_time') or datetime.now()
+        dt = parse_datetime_safe(mtime)
+        if dt is None:
+            dt = datetime.now()
+
+        # 获取原文件名（不含扩展名）
+        name_without_ext = Path(record['file_name']).stem
+        file_type = FILE_TYPE_NAMES.get(record.get('file_type', 'other'), '其他')
+
+        name = pattern.replace('{date}', dt.strftime('%Y%m%d'))
+        name = name.replace('{time}', dt.strftime('%H%M%S'))
+        name = name.replace('{type}', file_type)
+        name = name.replace('{original_name}', name_without_ext)
+        name = name.replace('{ext}', record.get('file_extension', ''))
+
+        return name
+
+    @staticmethod
+    def _ensure_unique_path(file_path: str) -> str:
+        """确保文件路径唯一，避免覆盖"""
+        if not os.path.exists(file_path):
+            return file_path
+
+        p = Path(file_path)
+        stem = p.stem
+        ext = p.suffix
+        parent = p.parent
+        counter = 1
+        while True:
+            new_path = parent / f"{stem}_{counter}{ext}"
+            if not os.path.exists(new_path):
+                return str(new_path)
+            counter += 1
