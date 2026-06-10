@@ -38,9 +38,9 @@ class OperationHistoryManager:
             elif op_type == 'move':
                 self._undo_move(file_id, old_value, new_value)
             elif op_type == 'delete':
-                self._undo_delete(file_id, old_value)
+                self._undo_delete(file_id, old_value, new_value)
             elif op_type == 'dedup':
-                self._undo_delete(file_id, old_value)
+                self._undo_delete(file_id, old_value, new_value)
             else:
                 raise ValueError(f"不支持撤销的操作类型: {op_type}")
 
@@ -101,8 +101,24 @@ class OperationHistoryManager:
         old_name = os.path.basename(old_path)
         self.file_dao.update_name(file_id, old_name, old_path)
 
-    def _undo_delete(self, file_id: int, old_path: str) -> None:
-        """撤销删除（仅恢复数据库状态）"""
+    def _undo_delete(self, file_id: int, old_path: str, trash_path: str = None) -> None:
+        """撤销删除：从本地回收区恢复文件，或仅恢复数据库状态"""
+        if trash_path and os.path.exists(trash_path):
+            # 回收区文件存在，恢复到原路径
+            old_dir = os.path.dirname(old_path)
+            os.makedirs(old_dir, exist_ok=True)
+            if os.path.exists(old_path):
+                raise FileExistsError(f"原路径已被占用，无法恢复: {old_path}")
+            shutil.move(trash_path, old_path)
+            logger.info(f"从回收区恢复文件: {trash_path} -> {old_path}")
+        elif trash_path == 'permanent':
+            raise RuntimeError("永久删除的文件无法撤销")
+        else:
+            # 回收区路径未知或文件已不存在，仅恢复数据库状态
+            logger.warning(
+                f"回收区文件不存在或未记录路径 (trash_path={trash_path})，"
+                f"仅恢复数据库状态，磁盘文件需手动恢复")
+
         self.file_dao.update_status(file_id, 'active')
 
     def get_recent_operations(self, limit: int = 100,

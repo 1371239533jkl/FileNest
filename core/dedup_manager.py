@@ -2,10 +2,12 @@
 去重管理器 - 基于SHA256哈希检测和处理重复文件
 """
 import uuid
+import os
 from typing import Optional, List, Dict, Tuple
 
 from database.db_manager import db
 from database.models import FileDAO, OperationHistoryDAO
+from core.file_manager import _move_to_trash
 from utils.logger import logger
 
 
@@ -77,7 +79,7 @@ class DedupManager:
 
     def remove_duplicates(self, group_id: int, keep_file_id: int,
                           remove_file_ids: List[int]) -> Tuple[str, int]:
-        """执行去重 - 标记删除重复文件"""
+        """执行去重 - 将重复文件移至回收区并标记删除"""
         batch_id = f"dedup_{uuid.uuid4().hex[:8]}"
         removed = 0
 
@@ -86,9 +88,21 @@ class DedupManager:
                 record = self.file_dao.get_by_id(fid)
                 if not record:
                     continue
+
+                file_path = record['file_path']
+                trash_path = None
+
+                # 移至回收区
+                if os.path.exists(file_path):
+                    try:
+                        trash_path = _move_to_trash(file_path)
+                    except Exception as e:
+                        logger.warning(f"去重: 移至回收区失败 ID={fid}: {e}")
+                        continue  # 移不成就跳过，不修改数据库
+
                 self.file_dao.update_status(fid, 'deleted')
                 self.history_dao.insert(
-                    'dedup', fid, record['file_path'], f"keep={keep_file_id}",
+                    'dedup', fid, file_path, trash_path,
                     batch_id=batch_id)
                 removed += 1
             except Exception as e:

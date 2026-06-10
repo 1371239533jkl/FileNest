@@ -1,5 +1,6 @@
 """
 文件操作管理 - 重命名、移动、删除
+删除的文件移至应用本地回收区(.trash/)，支持在应用内一键恢复。
 """
 import os
 import shutil
@@ -8,13 +9,38 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Tuple
 
-import send2trash
-
 from config import DEFAULT_RENAME_PATTERN, FILE_TYPE_NAMES
 from database.db_manager import db
 from database.models import FileDAO, OperationHistoryDAO
 from utils.date_utils import parse_datetime_safe
 from utils.logger import logger
+
+# 应用本地回收区（与 logs 同级）
+_APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_TRASH_DIR = os.path.join(_APP_DIR, '.trash')
+
+
+def _move_to_trash(file_path: str) -> str:
+    """将文件移至本地回收区，返回回收区路径"""
+    os.makedirs(_TRASH_DIR, exist_ok=True)
+    trash_name = f"{uuid.uuid4().hex[:8]}_{os.path.basename(file_path)}"
+    trash_path = os.path.join(_TRASH_DIR, trash_name)
+    trash_path = FileManager._ensure_unique_path(trash_path)
+    shutil.move(file_path, trash_path)
+    logger.info(f"文件已移至回收区: {trash_path}")
+    return trash_path
+
+
+def _restore_from_trash(trash_path: str, original_path: str) -> None:
+    """从回收区恢复文件到原路径"""
+    if not os.path.exists(trash_path):
+        raise FileNotFoundError(f"回收区文件不存在: {trash_path}")
+    parent = os.path.dirname(original_path)
+    os.makedirs(parent, exist_ok=True)
+    if os.path.exists(original_path):
+        raise FileExistsError(f"原路径已被占用: {original_path}")
+    shutil.move(trash_path, original_path)
+    logger.info(f"从回收区恢复: {trash_path} -> {original_path}")
 
 
 class FileManager:
@@ -139,50 +165,77 @@ class FileManager:
         return op_id
 
     def delete_file(self, file_id: int, batch_id: Optional[str] = None) -> Optional[int]:
-        """删除文件（送回收站 + 标记数据库）"""
+        """删除文件（移至回收区 + 标记数据库）
+        new_value 记录回收区路径，撤销时可自动恢复文件。
+        """
         record = self.file_dao.get_by_id(file_id)
         if not record:
             raise ValueError(f"文件记录不存在: id={file_id}")
 
         old_path = record['file_path']
-        try:
-            if os.path.exists(old_path):
-                send2trash.send2trash(old_path)
-        except Exception as e:
-            logger.warning(f"送回收站失败 (可能文件已被删除): {old_path}, 错误: {e}")
-            # 即使送回收站失败，也继续标记数据库
+        trash_path = None
+        if os.path.exists(old_path):
+            try:
+                trash_path = _move_to_trash(old_path)
+            except Exception as e:
+                logger.warning(f"移至回收区失败: {old_path}, 错误: {e}")
 
         self.file_dao.update_status(file_id, 'deleted')
 
         op_id = self.history_dao.insert(
-            'delete', file_id, old_path, None, batch_id=batch_id)
+            'delete', file_id, old_path, trash_path, batch_id=batch_id)
 
-        logger.info(f"删除（进回收站）: {old_path}")
+        logger.info(f"删除（进回收区）: {old_path} -> {trash_path}")
         return op_id
 
     def permanent_delete(self, file_id: int, batch_id: Optional[str] = None) -> None:
-        """永久删除文件"""
+        """永久删除文件（直接从磁盘删除，不经过回收区）"""
         record = self.file_dao.get_by_id(file_id)
         if not record:
             raise ValueError(f"文件记录不存在: id={file_id}")
 
         file_path = record['file_path']
-        try:
-            if os.path.exists(file_path):
+        if os.path.exists(file_path):
+            try:
                 os.remove(file_path)
-        except Exception as e:
-            logger.warning(f"永久删除文件失败 (可能文件已被删除): {file_path}, 错误: {e}")
-            raise RuntimeError(f"永久删除失败: {e}") from e
+            except Exception as e:
+                logger.warning(f"永久删除失败: {file_path}, 错误: {e}")
+                raise RuntimeError(f"永久删除失败: {e}") from e
 
         self.file_dao.update_status(file_id, 'deleted')
-        self.history_dao.insert(
-            'delete', file_id, file_path, None,
-            batch_id=batch_id)
         self.history_dao.insert(
             'delete', file_id, file_path, 'permanent',
             batch_id=batch_id)
 
         logger.info(f"永久删除: {file_path}")
+
+    def restore_file(self, file_id: int) -> None:
+        """从回收区恢复文件到原路径（供 UI 调用）"""
+        record = self.file_dao.get_by_id(file_id)
+        if not record:
+            raise ValueError(f"文件记录不存在: id={file_id}")
+        if record['status'] != 'deleted':
+            raise ValueError(f"文件未被删除，无法恢复: id={file_id}")
+
+        # 从操作历史中找到回收区路径
+        ops = self.history_dao.search(limit=10)
+        trash_path = None
+        for op in ops:
+            if op.get('file_id') == file_id and op.get('operation_type') in ('delete', 'dedup'):
+                nv = op.get('new_value')
+                if nv and nv not in ('permanent', 'recycle_bin') and os.path.exists(nv):
+                    trash_path = nv
+                    break
+
+        original_path = record['file_path']
+        if trash_path:
+            _restore_from_trash(trash_path, original_path)
+        else:
+            raise FileNotFoundError("回收区中找不到该文件，无法恢复")
+
+        self.file_dao.update_status(file_id, 'active')
+        self.history_dao.insert('restore', file_id, trash_path, original_path)
+        logger.info(f"恢复文件: {original_path}")
 
     @staticmethod
     def _validate_path_safety(expected_base: str, target_path: str, operation_name: str) -> None:

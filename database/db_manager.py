@@ -1,6 +1,9 @@
 """
-MySQL数据库连接管理器
+MySQL数据库连接管理器（线程安全）
+使用 threading.local() 为每个线程维护独立的数据库连接，
+避免 QThread 工作线程与 UI 线程共享同一连接导致的数据竞争。
 """
+import threading
 import pymysql
 from pymysql.cursors import DictCursor
 import os
@@ -10,49 +13,56 @@ from utils.logger import logger
 
 
 class DBManager:
-    """MySQL数据库管理类"""
+    """MySQL数据库管理类（线程安全）"""
 
     def __init__(self):
         self.config = MYSQL_CONFIG.copy()
-        self.connection = None
+        self._local = threading.local()
 
+    def _get_local_connection(self):
+        """获取当前线程的数据库连接，若不存在或已断开则重新创建"""
+        conn = getattr(self._local, 'connection', None)
+        if conn is None or not self._is_alive(conn):
+            conn = pymysql.connect(**self.config)
+            self._local.connection = conn
+        return conn
+
+    # 兼容旧接口：外部仍可通过 get_connection() 获取当前线程连接
     def get_connection(self):
-        if self.connection is None or not self._is_alive():
-            self.connection = pymysql.connect(**self.config)
-        return self.connection
+        return self._get_local_connection()
 
-    def _is_alive(self):
+    @staticmethod
+    def _is_alive(conn):
         try:
-            self.connection.ping(reconnect=False)
+            conn.ping(reconnect=False)
             return True
         except Exception:
             return False
 
     def close(self):
-        if self.connection:
-            self.connection.close()
-            self.connection = None
+        """关闭当前线程的数据库连接"""
+        conn = getattr(self._local, 'connection', None)
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self._local.connection = None
 
     def execute_query(self, sql, params=None):
-        conn = self.get_connection()
-        try:
-            with conn.cursor(DictCursor) as cursor:
-                cursor.execute(sql, params)
-                return cursor.fetchall()
-        except Exception as e:
-            raise e
+        conn = self._get_local_connection()
+        with conn.cursor(DictCursor) as cursor:
+            cursor.execute(sql, params)
+            return cursor.fetchall()
 
     def execute_one(self, sql, params=None):
-        conn = self.get_connection()
-        try:
-            with conn.cursor(DictCursor) as cursor:
-                cursor.execute(sql, params)
-                return cursor.fetchone()
-        except Exception as e:
-            raise e
+        conn = self._get_local_connection()
+        with conn.cursor(DictCursor) as cursor:
+            cursor.execute(sql, params)
+            return cursor.fetchone()
 
     def execute_update(self, sql, params=None):
-        conn = self.get_connection()
+        conn = self._get_local_connection()
         try:
             with conn.cursor() as cursor:
                 affected = cursor.execute(sql, params)
@@ -63,7 +73,7 @@ class DBManager:
             raise e
 
     def execute_insert(self, sql, params=None):
-        conn = self.get_connection()
+        conn = self._get_local_connection()
         try:
             with conn.cursor() as cursor:
                 cursor.execute(sql, params)
@@ -74,7 +84,7 @@ class DBManager:
             raise e
 
     def execute_many(self, sql, params_list):
-        conn = self.get_connection()
+        conn = self._get_local_connection()
         try:
             with conn.cursor() as cursor:
                 affected = cursor.executemany(sql, params_list)
@@ -138,9 +148,9 @@ class DBManager:
         finally:
             conn.close()
 
-        # 重新连接到新创建的数据库
-        self.connection = None
-        self.get_connection()
+        # 重新连接到新创建的数据库（关闭当前线程的旧连接，下次访问时自动重建）
+        self.close()
+        self._get_local_connection()
 
         logger.info("数据库初始化完成")
 

@@ -16,6 +16,7 @@ class FileClassifier:
     def __init__(self):
         self.cls_dao = ClassificationDAO(db)
         self.rule_dao = ClassificationRuleDAO(db)
+        self._db_rules_cache: Optional[list] = None  # 缓存数据库规则，避免每个文件都查库
 
     def classify_file(self, file_record: dict) -> List[Tuple[str, str]]:
         """对单个文件进行全维度分类（直接插入数据库）"""
@@ -78,13 +79,39 @@ class FileClassifier:
             return None
         return dt.strftime('%Y年%m月')
 
+    def _load_db_rules(self) -> list:
+        """从数据库加载已启用的分类规则（懒加载 + 缓存）
+        返回: [(target_category, [keyword1, keyword2, ...]), ...]
+        """
+        if self._db_rules_cache is not None:
+            return self._db_rules_cache
+        try:
+            rules = self.rule_dao.get_enabled()
+            parsed = []
+            for rule in rules:
+                # rule_pattern 格式: "关键词1|关键词2|关键词3"
+                keywords = [kw.strip() for kw in rule['rule_pattern'].split('|') if kw.strip()]
+                if keywords:
+                    parsed.append((rule['target_category'], keywords))
+            self._db_rules_cache = parsed
+            logger.info(f"从数据库加载了 {len(parsed)} 条分类规则")
+        except Exception as e:
+            logger.warning(f"加载数据库分类规则失败: {e}")
+            self._db_rules_cache = []
+        return self._db_rules_cache
+
+    def invalidate_rules_cache(self):
+        """清除规则缓存（当用户修改规则后调用）"""
+        self._db_rules_cache = None
+
     def _classify_by_rules(self, file_record: dict) -> List[Tuple[str, float]]:
-        """内置智能规则分类（基于文件名和路径关键词，不需要配规则）"""
+        """基于内置规则和数据库自定义规则进行分类"""
         file_name = file_record.get('file_name', '')
         file_path = file_record.get('file_path', '')
         name_lower = file_name.lower()
         path_lower = file_path.lower()
         results: List[Tuple[str, float]] = []
+        matched_categories = set()  # 避免同一分类重复添加
 
         # ── 内置规则表 ──
         builtin_rules = [
@@ -101,12 +128,28 @@ class FileClassifier:
         ]
 
         for category, keywords, scope in builtin_rules:
+            if category in matched_categories:
+                continue
             target = path_lower if scope == "path" else name_lower
             for kw in keywords:
                 if kw in target:
-                    # 简短匹配较低的置信度 vs 较长关键词
                     conf = min(0.5 + len(kw) * 0.06, 0.95)
                     results.append((category, conf))
+                    matched_categories.add(category)
+                    break
+
+        # ── 数据库自定义规则 ──
+        db_rules = self._load_db_rules()
+        for target_category, keywords in db_rules:
+            if target_category in matched_categories:
+                continue
+            # 数据库规则默认对文件名和路径都匹配
+            for kw in keywords:
+                kw_lower = kw.lower()
+                if kw_lower in name_lower or kw_lower in path_lower:
+                    conf = min(0.5 + len(kw) * 0.06, 0.95)
+                    results.append((target_category, conf))
+                    matched_categories.add(target_category)
                     break
 
         return results
