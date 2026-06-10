@@ -118,6 +118,11 @@ class ToastNotification(QFrame):
 
     def _start_animation(self):
         """滑动进入动画"""
+        # 使用顶层窗口作为父级，避免被 QStackedWidget 隐藏
+        top_level = self.window()
+        if top_level and top_level is not self.parent():
+            self.setParent(top_level)
+
         parent_width = self.parent().width() if self.parent() else 400
         self.setFixedWidth(min(parent_width - 40, 500))
         self.adjustSize()
@@ -128,7 +133,7 @@ class ToastNotification(QFrame):
         self.raise_()
         self.show()
 
-        self._slide_anim = QPropertyAnimation(self, b"geometry")
+        self._slide_anim = QPropertyAnimation(self, b"geometry", self)
         self._slide_anim.setDuration(200)
         self._slide_anim.setStartValue(self.geometry())
         self._slide_anim.setEndValue(QRect(x, 12, self.width(), self.height()))
@@ -138,15 +143,18 @@ class ToastNotification(QFrame):
     def _fade_out(self):
         """滑动消失动画"""
         if not self.isVisible():
+            self._cleanup()
             return
         x = (self.parent().width() - self.width()) // 2 if self.parent() else 0
-        self._slide_out = QPropertyAnimation(self, b"geometry")
+        self._slide_out = QPropertyAnimation(self, b"geometry", self)
         self._slide_out.setDuration(200)
         self._slide_out.setStartValue(self.geometry())
         self._slide_out.setEndValue(QRect(x, -self.height(), self.width(), self.height()))
         self._slide_out.setEasingCurve(QEasingCurve.Type.InCubic)
         self._slide_out.finished.connect(self._cleanup)
         self._slide_out.start()
+        # 安全兜底：动画异常时强制清理
+        QTimer.singleShot(self._slide_out.duration() + 100, self._cleanup)
 
     def _cleanup(self):
         ToastNotification._current_toast = None

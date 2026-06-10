@@ -217,15 +217,13 @@ class FileManager:
         if record['status'] != 'deleted':
             raise ValueError(f"文件未被删除，无法恢复: id={file_id}")
 
-        # 从操作历史中找到回收区路径
-        ops = self.history_dao.search(limit=10)
+        # 精确查找该文件最近一次删除/去重操作记录
+        op = self.history_dao.get_latest_delete(file_id)
         trash_path = None
-        for op in ops:
-            if op.get('file_id') == file_id and op.get('operation_type') in ('delete', 'dedup'):
-                nv = op.get('new_value')
-                if nv and nv not in ('permanent', 'recycle_bin') and os.path.exists(nv):
-                    trash_path = nv
-                    break
+        if op:
+            nv = op.get('new_value')
+            if nv and nv not in ('permanent', 'recycle_bin') and os.path.exists(nv):
+                trash_path = nv
 
         original_path = record['file_path']
         if trash_path:
@@ -236,6 +234,31 @@ class FileManager:
         self.file_dao.update_status(file_id, 'active')
         self.history_dao.insert('restore', file_id, trash_path, original_path)
         logger.info(f"恢复文件: {original_path}")
+
+    def purge_file(self, file_id: int, update_status: bool = True) -> None:
+        """从回收区永久删除文件（删除磁盘回收区副本 + 更新数据库状态为 purged）"""
+        record = self.file_dao.get_by_id(file_id)
+        if not record:
+            raise ValueError(f"文件记录不存在: id={file_id}")
+
+        # 查找回收区路径并删除
+        op = self.history_dao.get_latest_delete(file_id)
+        if op:
+            nv = op.get('new_value')
+            if nv and nv not in ('permanent', 'recycle_bin') and os.path.exists(nv):
+                try:
+                    os.remove(nv)
+                    logger.info(f"已从回收区永久删除: {nv}")
+                except OSError as e:
+                    logger.warning(f"删除回收区文件失败: {nv} - {e}")
+
+        # 更新状态为 purged，使其从回收区列表消失
+        if update_status:
+            self.file_dao.update_status(file_id, 'purged')
+
+        # 记录操作历史
+        self.history_dao.insert(
+            'delete', file_id, record.get('file_path'), 'permanent')
 
     @staticmethod
     def _validate_path_safety(expected_base: str, target_path: str, operation_name: str) -> None:

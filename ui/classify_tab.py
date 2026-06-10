@@ -14,94 +14,12 @@ from PyQt6.QtGui import QAction
 import os
 from config import FILE_TYPE_NAMES
 from core import FileClassifier, FileManager
+from core.batch_classifier import BatchClassifyWorker
 from database.db_manager import db
 from database.models import FileDAO, ClassificationDAO
 from utils.display_utils import format_size, truncate_path, get_file_icon, get_file_color
 from utils.logger import logger
 from ui.toast import notify
-
-
-class ReclassifyWorker(QThread):
-    """后台重新分类工作线程（独立DB连接，不抢主线程的连接）"""
-    progress = pyqtSignal(int, int)  # current, total
-    finished = pyqtSignal(int)
-    error = pyqtSignal(str)
-
-    def __init__(self, classifier, parent=None):
-        super().__init__(parent)
-        self.classifier = classifier
-
-    def run(self):
-        """独立连接，批量处理，完成后关闭"""
-        import pymysql
-        from pymysql.cursors import DictCursor
-        from config import MYSQL_CONFIG
-        from datetime import datetime
-
-        # 创建独立连接
-        conn = pymysql.connect(**MYSQL_CONFIG)
-        try:
-            # 1. 读取全部活动文件
-            with conn.cursor(DictCursor) as cur:
-                cur.execute("SELECT * FROM files WHERE status = 'active' ORDER BY scan_time DESC")
-                files = cur.fetchall()
-
-            total = len(files)
-            classified = 0
-            batch = []
-
-            for i, record in enumerate(files):
-                file_id = record['id']
-                try:
-                    # 清除旧分类（独立连接内执行）
-                    with conn.cursor() as cur:
-                        cur.execute("DELETE FROM file_classifications WHERE file_id = %s", (file_id,))
-
-                    # 内存分类，不操作数据库
-                    cls_results = self.classifier._classify_file_in_memory(record)
-                    if cls_results:
-                        classified += 1
-
-                    # 缓存批量插入
-                    now = datetime.now()
-                    for cls_type, cls_value, confidence in cls_results:
-                        batch.append((file_id, cls_type, cls_value, now, confidence))
-
-                    # 每 100 条 flush
-                    if len(batch) >= 100:
-                        with conn.cursor() as cur:
-                            cur.executemany(
-                                "INSERT INTO file_classifications "
-                                "(file_id, classification_type, classification_value, "
-                                "classification_time, confidence_score) "
-                                "VALUES (%s, %s, %s, %s, %s)", batch)
-                            conn.commit()
-                        batch.clear()
-
-                except Exception as e:
-                    logger.warning(f"分类失败 {record.get('file_name')}: {e}")
-
-                if i % 50 == 0:
-                    self.progress.emit(i + 1, total)
-
-            # 最后一次 flush
-            if batch:
-                with conn.cursor() as cur:
-                    cur.executemany(
-                        "INSERT INTO file_classifications "
-                        "(file_id, classification_type, classification_value, "
-                        "classification_time, confidence_score) "
-                        "VALUES (%s, %s, %s, %s, %s)", batch)
-                    conn.commit()
-
-            self.progress.emit(total, total)
-            logger.info(f"分类完成: {classified}/{total}")
-            self.finished.emit(classified)
-        except Exception as e:
-            logger.error(f"分类出错: {e}")
-            self.error.emit(str(e))
-        finally:
-            conn.close()
 
 
 class BatchOperationWorker(QThread):
@@ -332,6 +250,13 @@ class ClassifyTab(QWidget):
         self.file_table.setRowCount(len(page_files))
         self.file_count_label.setText(f"共 {total} 个文件")
 
+        # 批量查询分类（避免 N+1）
+        page_ids = [f['id'] for f in page_files]
+        try:
+            cls_map = self.cls_dao.get_by_file_ids(page_ids)
+        except Exception:
+            cls_map = {}
+
         for i, f in enumerate(page_files):
             item = QTableWidgetItem(get_file_icon(f['file_type']) + f['file_name'])
             item.setData(Qt.ItemDataRole.UserRole, f['id'])
@@ -351,12 +276,9 @@ class ClassifyTab(QWidget):
             mtime = f.get('modify_time', '')
             self.file_table.setItem(i, 4, QTableWidgetItem(str(mtime) if mtime else ""))
 
-            # 获取分类
-            try:
-                cls_records = self.cls_dao.get_by_file_id(f['id'])
-                cls_text = ", ".join(c['classification_value'] for c in cls_records) if cls_records else "-"
-            except Exception:
-                cls_text = "-"
+            # 使用批量查询结果
+            cls_values = cls_map.get(f['id'], [])
+            cls_text = ", ".join(cls_values) if cls_values else "-"
             self.file_table.setItem(i, 5, QTableWidgetItem(cls_text))
 
         # 更新分页状态
@@ -606,7 +528,7 @@ class ClassifyTab(QWidget):
         self.reclassify_progress.setValue(0)
         self.reclassify_label.setText("正在重新分类...")
 
-        self.worker = ReclassifyWorker(self.classifier)
+        self.worker = BatchClassifyWorker(self.classifier)
         self.worker.progress.connect(self._on_reclassify_progress)
         self.worker.finished.connect(self._on_reclassify_finished)
         self.worker.error.connect(self._on_reclassify_error)

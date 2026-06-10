@@ -166,6 +166,19 @@ class FileDAO:
                  GROUP BY file_type ORDER BY count DESC"""
         return self.db.execute_query(sql)
 
+    def get_deleted_files(self, page: int = 0, page_size: int = 100) -> list:
+        """获取已删除文件（供回收区管理页面使用）"""
+        offset = page * page_size
+        sql = """SELECT * FROM files WHERE status = 'deleted'
+                 ORDER BY scan_time DESC LIMIT %s OFFSET %s"""
+        return self.db.execute_query(sql, (page_size, offset))
+
+    def count_deleted(self) -> int:
+        """已删除文件总数"""
+        row = self.db.execute_one(
+            "SELECT COUNT(*) as total FROM files WHERE status = 'deleted'")
+        return row['total'] if row else 0
+
     def delete_by_path(self, file_path: str) -> int:
         return self.db.execute_update(
             "UPDATE files SET status = 'deleted' WHERE file_path = %s", (file_path,))
@@ -233,6 +246,20 @@ class ClassificationDAO:
     def get_by_file_id(self, file_id: int) -> list:
         return self.db.execute_query(
             "SELECT * FROM file_classifications WHERE file_id = %s", (file_id,))
+
+    def get_by_file_ids(self, file_ids: list) -> dict:
+        """批量查询多个文件的分类，返回 {file_id: [classification_value, ...]}"""
+        if not file_ids:
+            return {}
+        placeholders = ','.join(['%s'] * len(file_ids))
+        rows = self.db.execute_query(
+            f"SELECT file_id, classification_value FROM file_classifications "
+            f"WHERE file_id IN ({placeholders}) ORDER BY classification_value",
+            tuple(file_ids))
+        result: dict = {}
+        for r in rows:
+            result.setdefault(r['file_id'], []).append(r['classification_value'])
+        return result
 
     def get_by_type(self, cls_type: str) -> list:
         return self.db.execute_query(
@@ -324,6 +351,13 @@ class OperationHistoryDAO:
         sql = f"SELECT * FROM operation_history WHERE {where} ORDER BY operation_time DESC LIMIT %s"
         params.append(limit)
         return self.db.execute_query(sql, tuple(params))
+
+    def get_latest_delete(self, file_id: int) -> Optional[dict]:
+        """查找指定文件最近一次删除/去重操作记录（用于回收区恢复）"""
+        sql = """SELECT * FROM operation_history
+                 WHERE file_id = %s AND operation_type IN ('delete', 'dedup')
+                 ORDER BY operation_time DESC LIMIT 1"""
+        return self.db.execute_one(sql, (file_id,))
 
 
 class ScanDirectoryDAO:

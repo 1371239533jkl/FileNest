@@ -6,110 +6,16 @@ from PyQt6.QtWidgets import (
     QFileDialog, QProgressBar, QTableWidget, QTableWidgetItem,
     QCheckBox, QMessageBox, QHeaderView
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt
 
 import os
 from core import FileScanWorker
+from core.batch_classifier import BatchClassifyWorker
 from database.db_manager import db
 from database.models import FileDAO, MetadataDAO, ScanDirectoryDAO
 from utils.display_utils import truncate_path
 from utils.logger import logger
 from ui.toast import notify
-
-
-class PostProcessWorker(QThread):
-    """扫描后处理：元数据提取 + 分类（独立DB连接）"""
-    progress = pyqtSignal(int)
-    finished = pyqtSignal()
-    error = pyqtSignal(str)
-
-    def __init__(self, do_metadata: bool, do_classify: bool, parent=None):
-        super().__init__(parent)
-        self.do_metadata = do_metadata
-        self.do_classify = do_classify
-
-    def run(self):
-        import pymysql
-        from pymysql.cursors import DictCursor
-        from config import MYSQL_CONFIG
-        from datetime import datetime
-        from core.metadata_extractor import extract_metadata
-
-        conn = pymysql.connect(**MYSQL_CONFIG)
-        try:
-            with conn.cursor(DictCursor) as cur:
-                cur.execute("SELECT * FROM files WHERE status = 'active' ORDER BY scan_time DESC")
-                files = cur.fetchall()
-
-            total = len(files)
-            count = 0
-            classify_batch = []
-
-            # 分类器（内置规则，不再需要数据库查询规则）
-            classifier = None
-            if self.do_classify:
-                from core import FileClassifier
-                classifier = FileClassifier()
-
-            for f in files:
-                try:
-                    # 元数据提取
-                    if self.do_metadata:
-                        metadata = extract_metadata(f['file_path'], f['file_type'])
-                        if metadata:
-                            cols = ['file_id'] + list(metadata.keys())
-                            placeholders = ', '.join(['%s'] * len(cols))
-                            update_parts = ', '.join(f'`{k}`=VALUES(`{k}`)' for k in metadata)
-                            sql = (f"INSERT INTO file_metadata (`{'`, `'.join(cols)}`) "
-                                   f"VALUES ({placeholders}) "
-                                   f"ON DUPLICATE KEY UPDATE {update_parts}")
-                            with conn.cursor() as cur:
-                                cur.execute(sql, (f['id'],) + tuple(metadata.values()))
-
-                    # 分类
-                    if self.do_classify:
-                        file_id = f['id']
-                        with conn.cursor() as cur:
-                            cur.execute("DELETE FROM file_classifications WHERE file_id = %s", (file_id,))
-                        cls_results = classifier._classify_file_in_memory(f)
-                        if cls_results:
-                            now = datetime.now()
-                            for cls_type, cls_value, confidence in cls_results:
-                                classify_batch.append((file_id, cls_type, cls_value, now, confidence))
-                            if len(classify_batch) >= 100:
-                                with conn.cursor() as cur:
-                                    cur.executemany(
-                                        "INSERT INTO file_classifications "
-                                        "(file_id, classification_type, classification_value, "
-                                        "classification_time, confidence_score) "
-                                        "VALUES (%s, %s, %s, %s, %s)", classify_batch)
-                                    conn.commit()
-                                classify_batch.clear()
-
-                except Exception:
-                    pass
-                count += 1
-                if count % 100 == 0:
-                    self.progress.emit(count)
-
-            # 最后一次 flush 分类
-            if classify_batch:
-                with conn.cursor() as cur:
-                    cur.executemany(
-                        "INSERT INTO file_classifications "
-                        "(file_id, classification_type, classification_value, "
-                        "classification_time, confidence_score) "
-                        "VALUES (%s, %s, %s, %s, %s)", classify_batch)
-                    conn.commit()
-
-            self.progress.emit(total)
-            logger.info(f"后处理完成: {total} 个文件")
-            self.finished.emit()
-        except Exception as e:
-            logger.error(f"后处理出错: {e}")
-            self.error.emit(str(e))
-        finally:
-            conn.close()
 
 
 class ScanTab(QWidget):
@@ -273,7 +179,14 @@ class ScanTab(QWidget):
             self.progress_bar.setValue(0)
             self.progress_label.setText("正在后处理...")
 
-            self.post_worker = PostProcessWorker(do_meta, do_cls)
+            # 构建分类器（仅在需要分类时传入）
+            classifier = None
+            if do_cls:
+                from core import FileClassifier
+                classifier = FileClassifier()
+
+            self.post_worker = BatchClassifyWorker(
+                classifier=classifier, do_metadata=do_meta)
             self.post_worker.progress.connect(self._on_post_progress)
             self.post_worker.finished.connect(self._on_post_finished)
             self.post_worker.error.connect(self._on_post_error)
@@ -282,8 +195,10 @@ class ScanTab(QWidget):
             self.progress_label.setVisible(False)
             self.refresh_data()
 
-    def _on_post_progress(self, count):
-        self.progress_label.setText(f"正在后处理 ({count} 个文件)...")
+    def _on_post_progress(self, current, total):
+        self.progress_bar.setMaximum(total)
+        self.progress_bar.setValue(current)
+        self.progress_label.setText(f"正在后处理 ({current}/{total})...")
 
     def _on_post_finished(self):
         self.stats_label.setText("后处理完成")
