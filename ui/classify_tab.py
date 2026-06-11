@@ -20,6 +20,7 @@ from database.models import FileDAO, ClassificationDAO, MetadataDAO
 from utils.display_utils import format_size, truncate_path, get_file_icon, get_file_color
 from utils.logger import logger
 from ui.toast import notify
+from ui.empty_state import create_empty_state
 
 
 class BatchOperationWorker(QThread):
@@ -153,6 +154,10 @@ class ClassifyTab(QWidget):
         self.file_table.itemSelectionChanged.connect(self._on_selection_changed)
         right_layout.addWidget(self.file_table)
 
+        # 空状态引导
+        self._empty_state = create_empty_state('classify', parent=center_widget)
+        right_layout.addWidget(self._empty_state)
+
         # 分页控件
         page_layout = QHBoxLayout()
         self.prev_page_btn = QPushButton("上一页")
@@ -263,6 +268,10 @@ class ClassifyTab(QWidget):
 
         self.file_table.setRowCount(len(files))
         self.file_count_label.setText(f"共 {total} 个文件")
+
+        # 空状态检测
+        self._empty_state.setVisible(len(files) == 0)
+        self.file_table.setVisible(len(files) > 0)
 
         # 批量查询分类（避免 N+1）
         page_ids = [f['id'] for f in files]
@@ -473,6 +482,37 @@ class ClassifyTab(QWidget):
                     self.refresh_data()
                 except Exception as e:
                     QMessageBox.critical(self, "删除失败", str(e))
+
+    def rename_selected(self):
+        """F2 重命名当前选中的第一个文件"""
+        rows = self.file_table.selectionModel().selectedRows()
+        if not rows:
+            notify(self, "请先选择要重命名的文件", 'info', 2000)
+            return
+        item = self.file_table.item(rows[0].row(), 0)
+        if item:
+            fid = item.data(Qt.ItemDataRole.UserRole)
+            if fid is not None:
+                self._context_rename(fid)
+
+    def delete_selected(self):
+        """Delete 标记删除选中的文件"""
+        ids = self._get_selected_ids()
+        if not ids:
+            notify(self, "请先选择要删除的文件", 'info', 2000)
+            return
+        reply = QMessageBox.question(
+            self, "确认删除", f"确定标记删除选中的 {len(ids)} 个文件?")
+        if reply == QMessageBox.StandardButton.Yes:
+            success = 0
+            for fid in ids:
+                try:
+                    self.file_manager.delete_file(fid)
+                    success += 1
+                except Exception as e:
+                    logger.warning(f"删除失败 ID={fid}: {e}")
+            notify(self, f"已标记删除 {success} 个文件", 'success', 3000)
+            self.refresh_data()
 
     def _get_selected_ids(self):
         """从表格选中行读取文件ID（基于单元格数据，不受排序影响）"""

@@ -13,6 +13,7 @@ from config import FILE_TYPE_NAMES
 from utils.display_utils import format_size
 from utils.logger import logger
 from ui.chart_widgets import StatCard, PieChartWidget, BarChartWidget, TrendChartWidget
+from ui.empty_state import create_empty_state
 
 
 class DashboardTab(QWidget):
@@ -99,6 +100,10 @@ class DashboardTab(QWidget):
         scroll.setWidget(self._content)
         layout.addWidget(scroll, 1)
 
+        # 空状态引导
+        self._empty_state = create_empty_state('dashboard', parent=self._content)
+        self._grid.insertWidget(0, self._empty_state)
+
     def refresh_data(self):
         try:
             self._load_stats()
@@ -108,6 +113,22 @@ class DashboardTab(QWidget):
     def _load_stats(self):
         # ── 统计卡片 ──
         total_files = self.file_dao.count_active()
+
+        # 空状态检测
+        if total_files == 0:
+            self._empty_state.setVisible(True)
+            self.card_total_files.set_value("-")
+            self.card_total_size.set_value("-")
+            self.card_dup_groups.set_value("-")
+            self.card_wasted.set_value("-")
+            self.pie_type.set_data([], "文件类型分布")
+            self.bar_size.set_data([], "文件大小分布")
+            self.bar_dirs.set_data([], "目录占用 Top 10")
+            self.trend_monthly.set_data([], "月度扫描趋势")
+            return
+
+        self._empty_state.setVisible(False)
+
         total_size = self.file_dao.get_total_size()
         dup_groups = self.file_dao.count_duplicate_groups()
         wasted = self.file_dao.get_duplicate_total_wasted()

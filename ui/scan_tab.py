@@ -11,11 +11,13 @@ from PyQt6.QtCore import Qt
 import os
 from core import FileScanWorker
 from core.batch_classifier import BatchClassifyWorker
+from core.file_watcher import WatcherManager
 from database.db_manager import db
 from database.models import FileDAO, MetadataDAO, ScanDirectoryDAO
 from utils.display_utils import truncate_path
 from utils.logger import logger
 from ui.toast import notify
+from ui.empty_state import create_empty_state
 
 
 class ScanTab(QWidget):
@@ -25,6 +27,7 @@ class ScanTab(QWidget):
         self.file_dao = FileDAO(db)
         self.metadata_dao = MetadataDAO(db)
         self.scan_dao = ScanDirectoryDAO(db)
+        self._watcher_mgr = WatcherManager.get_instance()
         self._init_ui()
 
     def _init_ui(self):
@@ -106,6 +109,12 @@ class ScanTab(QWidget):
         self.progress_label.setVisible(False)
         layout.addWidget(self.progress_label)
 
+        self.eta_label = QLabel("")
+        self.eta_label.setObjectName("subtitleLabel")
+        self.eta_label.setStyleSheet("color: #89b4fa;")
+        self.eta_label.setVisible(False)
+        layout.addWidget(self.eta_label)
+
         # 已配置扫描目录列表
         dir_title = QLabel("已配置扫描目录")
         dir_title.setStyleSheet("font-size: 15px; font-weight: bold; color: #cba6f7; margin-top: 10px;")
@@ -121,6 +130,10 @@ class ScanTab(QWidget):
         self.dir_table.setAlternatingRowColors(True)
         self.dir_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         layout.addWidget(self.dir_table)
+
+        # 空状态引导
+        self._empty_state = create_empty_state('scan', parent=self)
+        layout.addWidget(self._empty_state)
 
         self.refresh_data()
 
@@ -147,9 +160,12 @@ class ScanTab(QWidget):
             compute_hash=self.hash_cb.isChecked()
         )
         self.scan_worker.progress.connect(self._on_progress)
+        self.scan_worker.progress_eta.connect(self._on_eta)
         self.scan_worker.finished.connect(self._on_scan_finished)
         self.scan_worker.error.connect(self._on_scan_error)
         self.scan_worker.start()
+
+        self.eta_label.setVisible(True)
 
     def _cancel_scan(self):
         if self.scan_worker:
@@ -157,6 +173,7 @@ class ScanTab(QWidget):
             self.scan_btn.setEnabled(True)
             self.cancel_btn.setEnabled(False)
             self.stats_label.setText("扫描已取消")
+            self.eta_label.setVisible(False)
 
     def _on_progress(self, current, total, path):
         self.progress_bar.setMaximum(total)
@@ -164,11 +181,16 @@ class ScanTab(QWidget):
         display_path = truncate_path(path, 80)
         self.progress_label.setText(f"正在扫描 ({current}/{total}): {display_path}")
 
+    def _on_eta(self, eta_str):
+        """显示扫描 ETA"""
+        self.eta_label.setText(f"⏱ 预计剩余: {eta_str}")
+
     def _on_scan_finished(self, new_count, total):
         self.scan_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.progress_bar.setValue(self.progress_bar.maximum())
         self.stats_label.setText(f"扫描完成: 新文件 {new_count} 个, 共 {total} 个")
+        self.eta_label.setVisible(False)
         notify(self, f"扫描完成: 新增 {new_count} 个文件, 共 {total} 个", 'success', 4000)
 
         do_meta = self.metadata_cb.isChecked()
@@ -220,6 +242,7 @@ class ScanTab(QWidget):
         self.cancel_btn.setEnabled(False)
         self.progress_bar.setVisible(False)
         self.progress_label.setVisible(False)
+        self.eta_label.setVisible(False)
         QMessageBox.critical(self, "扫描错误", f"扫描过程中发生错误:\n{error}")
 
     def refresh_data(self):
@@ -251,9 +274,44 @@ class ScanTab(QWidget):
         except Exception as e:
             logger.error(f"刷新数据失败: {e}")
 
+        # 空状态检测
+        self._empty_state.setVisible(self.dir_table.rowCount() == 0)
+
+        # 启动文件监控
+        self._start_watching()
+
     def _delete_directory(self, dir_id):
         reply = QMessageBox.question(self, "确认", "确定要删除该扫描目录配置吗？")
         if reply == QMessageBox.StandardButton.Yes:
             self.scan_dao.delete(dir_id)
             self.refresh_data()
             notify(self, "扫描目录已删除", 'success', 3000)
+
+    def _start_watching(self):
+        """启动文件变化监控"""
+        try:
+            dirs = self.scan_dao.get_all()
+            dir_paths = [d['directory_path'] for d in dirs if os.path.isdir(d['directory_path'])]
+            if dir_paths:
+                self._watcher_mgr.enable(
+                    dir_paths,
+                    scan_callback=self._on_auto_scan_triggered
+                )
+        except Exception as e:
+            logger.debug(f"启动文件监控失败: {e}")
+
+    def _on_auto_scan_triggered(self):
+        """文件变化触发的自动扫描提示"""
+        try:
+            dirs = self.scan_dao.get_all()
+            if not dirs:
+                return
+            # 自动扫描最近配置的目录
+            dir_path = dirs[-1]['directory_path']
+            if not os.path.isdir(dir_path):
+                return
+            notify(self, f"检测到新文件，自动扫描: {os.path.basename(dir_path)}", 'info', 3000)
+            self.path_label.setText(dir_path)
+            self._start_scan()
+        except Exception as e:
+            logger.warning(f"自动扫描触发失败: {e}")

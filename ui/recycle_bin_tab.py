@@ -14,6 +14,7 @@ from database.models import FileDAO
 from utils.display_utils import format_size, truncate_path
 from utils.logger import logger
 from ui.toast import notify
+from ui.empty_state import create_empty_state
 
 
 class RecycleBinTab(QWidget):
@@ -80,6 +81,10 @@ class RecycleBinTab(QWidget):
             QTableWidget.SelectionMode.MultiSelection)
         layout.addWidget(self.table, 1)
 
+        # 空状态引导
+        self._empty_state = create_empty_state('recycle_bin', parent=self)
+        layout.addWidget(self._empty_state)
+
         # ── 分页 ──
         page_layout = QHBoxLayout()
         self.prev_btn = QPushButton("上一页")
@@ -131,6 +136,14 @@ class RecycleBinTab(QWidget):
     def refresh_data(self):
         self._load_page()
 
+    def delete_selected(self):
+        """Delete 快捷键触发：永久删除选中文件"""
+        ids = self._get_selected_ids()
+        if not ids:
+            QMessageBox.information(self, "提示", "请先选择要删除的文件")
+            return
+        self._purge_selected()
+
     def _load_page(self):
         try:
             self._total_count = self.file_dao.count_deleted()
@@ -148,6 +161,10 @@ class RecycleBinTab(QWidget):
 
         self.table.setRowCount(len(files))
         self.count_label.setText(f"共 {self._total_count} 个文件")
+
+        # 空状态检测
+        self._empty_state.setVisible(len(files) == 0)
+        self.table.setVisible(len(files) > 0)
 
         total_size = sum(f.get('file_size', 0) for f in files)
         self.size_label.setText(f"本页占用: {format_size(total_size)}")

@@ -19,6 +19,7 @@ from database.models import FileDAO
 from utils.display_utils import format_size, truncate_path, get_file_icon, get_file_color
 from utils.logger import logger
 from ui.toast import notify
+from ui.empty_state import create_empty_state
 
 
 class SearchTab(QWidget):
@@ -154,6 +155,10 @@ class SearchTab(QWidget):
         self.result_table.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self.result_table, 1)
 
+        # 空状态引导
+        self._empty_state = create_empty_state('search', parent=self)
+        layout.addWidget(self._empty_state)
+
         # 分页控件
         page_layout = QHBoxLayout()
         self.prev_page_btn = QPushButton("上一页")
@@ -211,6 +216,10 @@ class SearchTab(QWidget):
     def _populate_results(self, files):
         total = self.total_count
         total_pages = max(1, (total + self.page_size - 1) // self.page_size)
+
+        # 空状态检测
+        self._empty_state.setVisible(total == 0)
+        self.result_table.setVisible(total > 0)
 
         # 修正当前页范围
         if self.current_page >= total_pages:
@@ -431,6 +440,45 @@ class SearchTab(QWidget):
 
     def refresh_data(self):
         pass
+
+    def focus_search(self):
+        """Ctrl+F 聚焦搜索框"""
+        self.name_input.setFocus()
+        self.name_input.selectAll()
+
+    def delete_selected(self):
+        """Delete 快捷键触发：标记删除选中文件"""
+        rows = self.result_table.selectionModel().selectedRows()
+        if not rows:
+            QMessageBox.information(self, "提示", "请先选择要删除的文件")
+            return
+        reply = QMessageBox.question(
+            self, "确认删除", f"确定标记删除选中的 {len(rows)} 个文件?")
+        if reply == QMessageBox.StandardButton.Yes:
+            success = 0
+            for idx in rows:
+                item = self.result_table.item(idx.row(), 0)
+                if item:
+                    fid = item.data(Qt.ItemDataRole.UserRole)
+                    try:
+                        self.file_manager.delete_file(fid)
+                        success += 1
+                    except Exception as e:
+                        logger.warning(f"删除失败: {e}")
+            notify(self, f"已标记删除 {success} 个文件", 'success', 3000)
+            self.refresh_data()
+
+    def rename_selected(self):
+        """F2 快捷键触发：重命名当前选中的第一个文件"""
+        rows = self.result_table.selectionModel().selectedRows()
+        if not rows:
+            QMessageBox.information(self, "提示", "请先选择要重命名的文件")
+            return
+        item = self.result_table.item(rows[0].row(), 0)
+        if item:
+            fid = item.data(Qt.ItemDataRole.UserRole)
+            if fid is not None:
+                self._context_rename(fid)
 
     def _export_csv(self):
         """导出当前搜索结果（全量）为 CSV 文件"""

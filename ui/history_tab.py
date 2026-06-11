@@ -13,6 +13,7 @@ import csv
 
 from core import OperationHistoryManager
 from utils.logger import logger
+from ui.empty_state import create_empty_state
 
 
 OPERATION_NAMES = {
@@ -106,6 +107,10 @@ class HistoryTab(QWidget):
         self.history_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         layout.addWidget(self.history_table, 1)
 
+        # 空状态引导
+        self._empty_state = create_empty_state('history', parent=self)
+        layout.addWidget(self._empty_state)
+
         # 底部操作
         bottom_layout = QHBoxLayout()
 
@@ -151,6 +156,10 @@ class HistoryTab(QWidget):
     def _populate_table(self, records):
         self.history_table.setRowCount(len(records))
         self.count_label.setText(f"共 {len(records)} 条记录")
+
+        # 空状态检测
+        self._empty_state.setVisible(len(records) == 0)
+        self.history_table.setVisible(len(records) > 0)
 
         for i, r in enumerate(records):
             self.history_table.setItem(i, 0, QTableWidgetItem(

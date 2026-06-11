@@ -193,6 +193,21 @@ class MainWindow(QMainWindow):
         self._undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
         self._undo_shortcut.activated.connect(self._on_undo_shortcut)
 
+        self._search_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
+        self._search_shortcut.activated.connect(self._on_search_shortcut)
+
+        self._refresh_shortcut = QShortcut(QKeySequence("Ctrl+R"), self)
+        self._refresh_shortcut.activated.connect(self._on_refresh_shortcut)
+
+        self._refresh_shortcut2 = QShortcut(QKeySequence("F5"), self)
+        self._refresh_shortcut2.activated.connect(self._on_refresh_shortcut)
+
+        self._delete_shortcut = QShortcut(QKeySequence("Delete"), self)
+        self._delete_shortcut.activated.connect(self._on_delete_shortcut)
+
+        self._rename_shortcut = QShortcut(QKeySequence("F2"), self)
+        self._rename_shortcut.activated.connect(self._on_rename_shortcut)
+
     # ── 反馈方法（供子页面调用） ──
 
     def show_toast(self, message: str,
@@ -225,6 +240,31 @@ class MainWindow(QMainWindow):
                 names = ["仪表盘", "扫描管理", "分类管理", "文件搜索", "操作历史", "回收区", "重复文件", "标签管理", "系统设置"]
                 self.show_toast(f"当前页面({names[idx]})不支持撤销", ToastType.INFO, 2000)
 
+    def _on_search_shortcut(self):
+        """Ctrl+F 切换到搜索页并聚焦搜索框"""
+        self.switch_to_tab(3)  # 搜索页 index=3
+        if hasattr(self.search_tab, 'focus_search'):
+            self.search_tab.focus_search()
+
+    def _on_refresh_shortcut(self):
+        """Ctrl+R / F5 刷新当前页面"""
+        current = self.stack.currentWidget()
+        if hasattr(current, 'refresh_data'):
+            current.refresh_data()
+            self.set_status("已刷新", 2000)
+
+    def _on_delete_shortcut(self):
+        """Delete 触发当前页面的删除操作"""
+        current = self.stack.currentWidget()
+        if hasattr(current, 'delete_selected'):
+            current.delete_selected()
+
+    def _on_rename_shortcut(self):
+        """F2 触发当前页面的重命名操作"""
+        current = self.stack.currentWidget()
+        if hasattr(current, 'rename_selected'):
+            current.rename_selected()
+
     def _on_nav_changed(self, index):
         if index < 0:
             return
@@ -234,6 +274,8 @@ class MainWindow(QMainWindow):
             widget.refresh_data()
 
     def closeEvent(self, event):
+        from core.file_watcher import WatcherManager
+        WatcherManager.get_instance().disable()
         db.close()
         event.accept()
 

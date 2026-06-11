@@ -4,6 +4,7 @@
 import os
 import hashlib
 import ctypes
+import time
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -74,9 +75,25 @@ def is_hidden_file(file_path: str) -> bool:
     return Path(file_path).name.startswith('.')
 
 
+def _format_eta(seconds: float) -> str:
+    """将秒数格式化为友好的 ETA 字符串"""
+    if seconds < 0:
+        return "即将完成"
+    if seconds < 60:
+        return f"约 {int(seconds)} 秒"
+    if seconds < 3600:
+        minutes = int(seconds // 60)
+        secs = int(seconds % 60)
+        return f"约 {minutes} 分 {secs} 秒"
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    return f"约 {hours} 时 {minutes} 分"
+
+
 class FileScanWorker(QThread):
     """文件扫描工作线程"""
     progress = pyqtSignal(int, int, str)  # current, total, path
+    progress_eta = pyqtSignal(str)  # ETA 字符串
     finished = pyqtSignal(int, int)  # new_count, total_count
     error = pyqtSignal(str)
 
@@ -115,6 +132,7 @@ class FileScanWorker(QThread):
 
             total = len(all_files)
             new_count = 0
+            start_time = time.time()  # 记录扫描开始时间
 
             # 预加载该目录下已有文件记录（字典键为 file_path），避免 N+1 查询
             existing_paths = {}
@@ -130,6 +148,18 @@ class FileScanWorker(QThread):
                 if self._cancelled:
                     return
                 self.progress.emit(i + 1, total, fp)
+
+                # 每 20 个文件或每 500ms 发射一次 ETA
+                if (i + 1) % 20 == 0 or i + 1 == total:
+                    elapsed = time.time() - start_time
+                    if i > 0:
+                        avg_time = elapsed / (i + 1)
+                        remaining_files = total - (i + 1)
+                        eta_seconds = avg_time * remaining_files
+                        eta_str = _format_eta(eta_seconds)
+                        self.progress_eta.emit(eta_str)
+                    else:
+                        self.progress_eta.emit("计算中...")
 
                 # 检查是否已存在（优先内存字典，预加载失败则回退逐条查询）
                 if preload_failed:

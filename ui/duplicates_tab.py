@@ -15,6 +15,7 @@ from database.models import FileDAO
 from utils.display_utils import format_size, truncate_path, get_file_icon
 from utils.logger import logger
 from ui.toast import notify
+from ui.empty_state import create_empty_state
 
 
 class DuplicatesTab(QWidget):
@@ -90,6 +91,10 @@ class DuplicatesTab(QWidget):
         splitter.setSizes([300, 200])
         layout.addWidget(splitter, 1)
 
+        # 空状态引导
+        self._empty_state = create_empty_state('duplicates', parent=self)
+        layout.addWidget(self._empty_state)
+
         # 分页 + 操作
         bottom = QHBoxLayout()
 
@@ -125,6 +130,17 @@ class DuplicatesTab(QWidget):
         total_wasted = self.file_dao.get_duplicate_total_wasted()
         self.stats_label.setText(
             f"共 {self._total_groups} 组重复 · 浪费空间: {format_size(total_wasted)}")
+
+        # 空状态检测
+        is_empty = self._total_groups == 0
+        self._empty_state.setVisible(is_empty)
+        if is_empty:
+            self.group_table.setRowCount(0)
+            self.detail_table.setRowCount(0)
+            self.page_label.setText("第 0 页 / 共 0 页")
+            self.prev_btn.setEnabled(False)
+            self.next_btn.setEnabled(False)
+            return
 
         groups = self.file_dao.get_duplicate_groups_paginated(
             page=self.current_page, page_size=self.page_size)

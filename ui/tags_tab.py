@@ -16,6 +16,7 @@ from core import TagManager
 from utils.display_utils import format_size, truncate_path, get_file_icon, get_file_color
 from utils.logger import logger
 from ui.toast import notify
+from ui.empty_state import create_empty_state
 
 
 _TAG_COLORS = [
@@ -130,6 +131,10 @@ class TagsTab(QWidget):
         sp.setSizes([180, 820])
         layout.addWidget(sp, 1)
 
+        # 空状态引导
+        self._empty_state = create_empty_state('tags', parent=self)
+        layout.addWidget(self._empty_state)
+
     # ── 标签云构建 ──
 
     def _build_cloud(self):
@@ -138,6 +143,10 @@ class TagsTab(QWidget):
 
         tags = self.tag_dao.get_all_tags()
         palette = _TAG_LIGHT if self._theme == 'light' else _TAG_COLORS
+
+        # 空状态检测
+        has_tags = len(tags) > 0
+        self._empty_state.setVisible(not has_tags)
 
         # 全部文件
         all_btn = self._make_btn("全部文件", 13, '#313244', '#cdd6f4', False)
