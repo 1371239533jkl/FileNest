@@ -186,8 +186,21 @@ class TestDirectoryWatcher:
     def test_debounce_timer(self):
         """防抖计时器初始化"""
         watcher = DirectoryWatcher()
-        assert watcher._debounce_timer.interval() == 2000
-        assert watcher._debounce_timer.isSingleShot() is True
+        # QTimer 延迟到 start() 中创建
+        assert watcher._debounce_timer is None
+        
+        # 启动后 QTimer 应该被创建
+        import tempfile
+        test_dir = tempfile.mkdtemp(prefix='sfm_watcher_timer_')
+        try:
+            watcher.start([test_dir])
+            assert watcher._debounce_timer is not None
+            assert watcher._debounce_timer.interval() == 2000
+            assert watcher._debounce_timer.isSingleShot() is True
+            watcher.stop()
+        finally:
+            import shutil
+            shutil.rmtree(test_dir, ignore_errors=True)
 
 
 # ═══ WatcherManager 测试 ═══

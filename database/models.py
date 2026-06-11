@@ -78,6 +78,15 @@ class FileDAO:
         return self.db.execute_update(
             "UPDATE files SET status = %s WHERE id = %s", (status, file_id))
 
+    def delete_record(self, file_id: int) -> int:
+        """从数据库中彻底删除文件记录（包括关联的元数据、分类、历史记录）"""
+        # 先删除关联数据
+        self.db.execute_update("DELETE FROM file_metadata WHERE file_id = %s", (file_id,))
+        self.db.execute_update("DELETE FROM file_classifications WHERE file_id = %s", (file_id,))
+        self.db.execute_update("DELETE FROM operation_history WHERE file_id = %s", (file_id,))
+        # 再删除文件记录本身
+        return self.db.execute_update("DELETE FROM files WHERE id = %s", (file_id,))
+
     def _build_search_conditions(self, name=None, file_type=None, extension=None,
                                   min_size=None, max_size=None, start_date=None,
                                   end_date=None, is_duplicate=None):

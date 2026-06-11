@@ -3,7 +3,7 @@
 """
 import os
 from typing import Optional
-from PyQt6.QtCore import QObject, pyqtSignal, QTimer
+from PyQt6.QtCore import QObject, pyqtSignal, QTimer, Qt, QMetaObject, Q_ARG
 
 from utils.logger import logger
 
@@ -36,10 +36,8 @@ class DirectoryWatcher(QObject):
         self._observer = None
         self._watched_dirs = set()
         self._pending_events = []
-        self._debounce_timer = QTimer()
-        self._debounce_timer.setInterval(2000)  # 2秒防抖
-        self._debounce_timer.setSingleShot(True)
-        self._debounce_timer.timeout.connect(self._flush_events)
+        # QTimer 延迟到 start() 中创建，确保在主线程中
+        self._debounce_timer = None
         self._enabled = False
     
     def start(self, directories: list):
@@ -54,6 +52,13 @@ class DirectoryWatcher(QObject):
         if not directories:
             logger.debug("没有目录需要监控")
             return
+        
+        # 在主线程中创建 QTimer（避免跨线程问题）
+        if self._debounce_timer is None:
+            self._debounce_timer = QTimer()
+            self._debounce_timer.setInterval(2000)  # 2秒防抖
+            self._debounce_timer.setSingleShot(True)
+            self._debounce_timer.timeout.connect(self._flush_events)
         
         try:
             from watchdog.observers import Observer
@@ -129,9 +134,14 @@ class DirectoryWatcher(QObject):
         evt = FileChangeEvent(event_type, path, event.is_directory)
         self._pending_events.append(evt)
         
-        # 启动防抖计时器
-        if not self._debounce_timer.isActive():
-            self._debounce_timer.start()
+        # 使用 QMetaObject.invokeMethod 将 QTimer 启动调度到主线程
+        # 因为 QTimer 不能在非 GUI 线程中启动
+        if self._debounce_timer and not self._debounce_timer.isActive():
+            QMetaObject.invokeMethod(
+                self._debounce_timer, 
+                "start",
+                Qt.ConnectionType.QueuedConnection
+            )
     
     def _flush_events(self):
         """防抖结束后发出累积的事件"""

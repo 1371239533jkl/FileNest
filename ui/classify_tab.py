@@ -200,9 +200,9 @@ class ClassifyTab(QWidget):
         layout.addWidget(splitter, 1)
 
     def refresh_data(self):
+        """刷新数据：重建分类树 + 重新加载当前页"""
         self._build_tree()
-        self._mode = 'all'
-        self.current_page = 0
+        # 保持当前模式，不强制切换到 'all'
         self._reload_page()
 
     def _build_tree(self):
@@ -266,6 +266,9 @@ class ClassifyTab(QWidget):
         if self.current_page >= total_pages:
             self.current_page = total_pages - 1
 
+        # 清除选中状态（避免切换页面时残留）
+        self.file_table.clearSelection()
+        
         self.file_table.setRowCount(len(files))
         self.file_count_label.setText(f"共 {total} 个文件")
 

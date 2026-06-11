@@ -189,25 +189,25 @@ class FileManager:
         return op_id
 
     def permanent_delete(self, file_id: int, batch_id: Optional[str] = None) -> None:
-        """永久删除文件（直接从磁盘删除，不经过回收区）"""
+        """永久删除文件（直接从磁盘删除 + 从数据库中彻底移除记录）"""
         record = self.file_dao.get_by_id(file_id)
         if not record:
             raise ValueError(f"文件记录不存在: id={file_id}")
 
         file_path = record['file_path']
+        
+        # 删除磁盘文件
         if os.path.exists(file_path):
             try:
                 os.remove(file_path)
+                logger.info(f"已从磁盘删除: {file_path}")
             except Exception as e:
-                logger.warning(f"永久删除失败: {file_path}, 错误: {e}")
-                raise RuntimeError(f"永久删除失败: {e}") from e
+                logger.warning(f"磁盘文件删除失败: {file_path}, 错误: {e}")
+                # 即使磁盘删除失败，也继续从数据库中移除记录
 
-        self.file_dao.update_status(file_id, 'deleted')
-        self.history_dao.insert(
-            'delete', file_id, file_path, 'permanent',
-            batch_id=batch_id)
-
-        logger.info(f"永久删除: {file_path}")
+        # 从数据库中彻底删除记录（包括关联的元数据、分类、历史）
+        self.file_dao.delete_record(file_id)
+        logger.info(f"已从数据库彻底移除: {file_path} (id={file_id})")
 
     def restore_file(self, file_id: int) -> None:
         """从回收区恢复文件到原路径（供 UI 调用）"""
@@ -236,7 +236,7 @@ class FileManager:
         logger.info(f"恢复文件: {original_path}")
 
     def purge_file(self, file_id: int, update_status: bool = True) -> None:
-        """从回收区永久删除文件（删除磁盘回收区副本 + 更新数据库状态为 purged）"""
+        """从回收区永久删除文件（删除磁盘回收区副本 + 从数据库中彻底移除记录）"""
         record = self.file_dao.get_by_id(file_id)
         if not record:
             raise ValueError(f"文件记录不存在: id={file_id}")
@@ -252,13 +252,10 @@ class FileManager:
                 except OSError as e:
                     logger.warning(f"删除回收区文件失败: {nv} - {e}")
 
-        # 更新状态为 purged，使其从回收区列表消失
-        if update_status:
-            self.file_dao.update_status(file_id, 'purged')
-
-        # 记录操作历史
-        self.history_dao.insert(
-            'delete', file_id, record.get('file_path'), 'permanent')
+        # 从数据库中彻底删除记录（包括关联的元数据、分类、历史）
+        # 不再使用 update_status('purged')，而是真正删除
+        self.file_dao.delete_record(file_id)
+        logger.info(f"已从数据库彻底移除: {record.get('file_path')} (id={file_id})")
 
     @staticmethod
     def _validate_path_safety(expected_base: str, target_path: str, operation_name: str) -> None:
