@@ -15,6 +15,7 @@ import os
 from config import FILE_TYPE_NAMES
 from core import FileClassifier, FileManager
 from core.batch_classifier import BatchClassifyWorker
+from core.data_cache import GlobalDataCache
 from database.db_manager import db
 from database.models import FileDAO, ClassificationDAO, MetadataDAO
 from utils.display_utils import format_size, truncate_path, get_file_icon, get_file_color
@@ -56,6 +57,52 @@ class BatchOperationWorker(QThread):
         self.finished.emit(results)
 
 
+class DataLoadWorker(QThread):
+    """后台数据加载工作线程"""
+    data_loaded = pyqtSignal(list, int)  # files, total_count
+    load_error = pyqtSignal(str)
+    
+    def __init__(self, file_dao, mode, current_page, page_size, parent=None):
+        super().__init__(parent)
+        self.file_dao = file_dao
+        self.mode = mode
+        self.current_page = current_page
+        self.page_size = page_size
+    
+    def run(self):
+        try:
+            if self.mode == 'all':
+                total_count = self.file_dao.count_active()
+                files = self.file_dao.get_all_active_paginated(
+                    page=self.current_page, page_size=self.page_size)
+            else:
+                _, cls_type, cls_value = self.mode
+                total_count = self.file_dao.count_by_classification(
+                    cls_type, cls_value)
+                files = self.file_dao.get_classification_paginated(
+                    cls_type, cls_value,
+                    page=self.current_page, page_size=self.page_size)
+            self.data_loaded.emit(files, total_count)
+        except Exception as e:
+            self.load_error.emit(str(e))
+
+
+class TreeLoadWorker(QThread):
+    """后台分类树加载工作线程"""
+    tree_loaded = pyqtSignal(dict)  # tree_data
+    
+    def __init__(self, classifier, parent=None):
+        super().__init__(parent)
+        self.classifier = classifier
+    
+    def run(self):
+        try:
+            tree_data = self.classifier.get_classification_tree()
+            self.tree_loaded.emit(tree_data)
+        except Exception:
+            self.tree_loaded.emit({})
+
+
 class ClassifyTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -71,6 +118,20 @@ class ClassifyTab(QWidget):
         self._mode = 'all'
         # 当前预览文件的路径
         self._current_preview_path = None
+        # 缓存分类树数据，避免每次刷新都重新查询
+        self._tree_cache = None
+        self._tree_cache_time = 0
+        # 是否正在加载数据
+        self._is_loading = False
+        # 后台数据加载工作线程
+        self._data_worker = None
+        # 后台分类树加载工作线程
+        self._tree_worker = None
+        # 文件列表数据缓存：{mode_key: (files, total_count, timestamp)}
+        self._data_cache = {}
+        self._data_cache_max_age = 30  # 缓存有效期（秒）
+        # 全局数据缓存服务
+        self._global_cache = GlobalDataCache.get_instance()
         self._init_ui()
 
     def _init_ui(self):
@@ -203,16 +264,59 @@ class ClassifyTab(QWidget):
 
     def refresh_data(self):
         """刷新数据：重建分类树 + 重新加载当前页"""
-        self._build_tree()
-        # 保持当前模式，不强制切换到 'all'
+        # 避免重复加载
+        if self._is_loading:
+            return
+        self._is_loading = True
+        
+        # 清除全局缓存（数据可能已变化）
+        self._global_cache.invalidate_cache()
+        
+        # 显示加载状态
+        self.file_count_label.setText("加载中...")
+        
+        # 清除树缓存，强制重新加载
+        self._tree_cache = None
+        self._tree_cache_time = 0
+        
+        # 异步加载分类树
+        self._build_tree_async()
+        
+        # 异步加载文件列表
         self._reload_page()
-
-    def _build_tree(self):
+    
+    def _build_tree_async(self):
+        """异步构建分类树"""
+        import time
+        current_time = time.time()
+        
+        # 检查缓存是否有效（30秒内）
+        if self._tree_cache is not None and (current_time - self._tree_cache_time) < 30:
+            # 使用缓存数据，直接构建树（很快）
+            self._build_tree_from_data(self._tree_cache)
+            return
+        
+        # 停止之前的 tree worker
+        if hasattr(self, '_tree_worker') and self._tree_worker is not None:
+            self._tree_worker.quit()
+            self._tree_worker.wait()
+        
+        # 创建后台工作线程加载树
+        self._tree_worker = TreeLoadWorker(self.classifier, self)
+        self._tree_worker.tree_loaded.connect(self._on_tree_loaded)
+        self._tree_worker.start()
+    
+    def _on_tree_loaded(self, tree_data: dict):
+        """分类树加载完成的回调"""
+        import time
+        self._tree_cache = tree_data
+        self._tree_cache_time = time.time()
+        self._build_tree_from_data(tree_data)
+        self._tree_worker = None
+    
+    def _build_tree_from_data(self, tree_data: dict):
+        """根据数据构建分类树（在 UI 线程中执行，很快）"""
         self.tree.clear()
-        try:
-            tree_data = self.classifier.get_classification_tree()
-        except Exception:
-            tree_data = {}
 
         # 全部文件
         all_item = QTreeWidgetItem(self.tree, ["全部文件"])
@@ -228,37 +332,119 @@ class ClassifyTab(QWidget):
         self.tree.expandAll()
 
     def _on_tree_click(self, item, column):
+        """分类树点击事件"""
         data = item.data(0, Qt.ItemDataRole.UserRole)
         if not data:
             return
-        self.current_page = 0
+        
+        # 避免重复点击相同分类
         category, value = data
         if category == 'all':
-            self._mode = 'all'
-            self._reload_page()
+            new_mode = 'all'
         else:
             type_map = {'按类型': 'by_type', '按日期': 'by_date', '按关键词': 'by_keyword'}
             db_type = type_map.get(category, category)
-            self._mode = ('classification', db_type, value)
-            self._reload_page()
+            new_mode = ('classification', db_type, value)
+        
+        # 如果点击的是当前已选中的分类，不重复加载
+        if new_mode == self._mode and self.current_page == 0:
+            return
+        
+        self.current_page = 0
+        self._mode = new_mode
+        self._reload_page()
 
+    def _get_mode_key(self) -> str:
+        """获取当前模式的缓存键"""
+        if self._mode == 'all':
+            return f"all_page_{self.current_page}"
+        else:
+            _, cls_type, cls_value = self._mode
+            return f"{cls_type}_{cls_value}_page_{self.current_page}"
+    
+    def _get_cached_data(self) -> tuple:
+        """尝试从缓存获取数据，返回 (files, total_count] 或 None"""
+        import time
+        mode_key = self._get_mode_key()
+        if mode_key in self._data_cache:
+            files, total_count, timestamp = self._data_cache[mode_key]
+            age = time.time() - timestamp
+            if age < self._data_cache_max_age:
+                return (files, total_count)
+        return None
+    
+    def _cache_data(self, files: list, total_count: int):
+        """缓存当前数据"""
+        import time
+        mode_key = self._get_mode_key()
+        self._data_cache[mode_key] = (files, total_count, time.time())
+        
+        # 限制缓存大小，保留最近 20 个
+        if len(self._data_cache) > 20:
+            # 删除最旧的缓存
+            oldest_key = min(self._data_cache.keys(), 
+                           key=lambda k: self._data_cache[k][2])
+            del self._data_cache[oldest_key]
+    
     def _reload_page(self):
-        """根据当前模式从数据库加载当前页"""
-        try:
-            if self._mode == 'all':
-                self._total_count = self.file_dao.count_active()
-                files = self.file_dao.get_all_active_paginated(
-                    page=self.current_page, page_size=self.page_size)
-            else:
-                _, cls_type, cls_value = self._mode
-                self._total_count = self.file_dao.count_by_classification(
-                    cls_type, cls_value)
-                files = self.file_dao.get_classification_paginated(
-                    cls_type, cls_value,
-                    page=self.current_page, page_size=self.page_size)
+        """根据当前模式从数据库加载当前页（优先全局缓存）"""
+        # 1. 优先从全局缓存读取（预加载的数据，0 延迟）
+        global_cached = self._global_cache.get_files(
+            self._mode, self.current_page, self.page_size)
+        if global_cached is not None:
+            files, total_count = global_cached
+            self._total_count = total_count
             self._populate_table(files)
-        except Exception as e:
-            logger.error(f"加载文件失败: {e}")
+            # 缓存命中，无需后台查询
+            return
+        
+        # 2. 全局缓存未命中，尝试本地缓存
+        cached = self._get_cached_data()
+        if cached is not None:
+            files, total_count = cached
+            self._total_count = total_count
+            self._populate_table(files)
+            # 显示"数据来自缓存"提示
+            self.file_count_label.setText(f"共 {total_count} 个文件（正在刷新...）")
+        else:
+            # 无缓存，显示加载状态
+            self.file_count_label.setText("加载中...")
+            self.file_table.setVisible(False)
+            self._empty_state.setVisible(False)
+        
+        # 3. 停止之前的 worker（如果存在）
+        if hasattr(self, '_data_worker') and self._data_worker is not None:
+            self._data_worker.quit()
+            self._data_worker.wait()
+        
+        # 4. 创建后台工作线程加载最新数据
+        self._data_worker = DataLoadWorker(
+            self.file_dao, self._mode, self.current_page, self.page_size, self)
+        self._data_worker.data_loaded.connect(self._on_data_loaded)
+        self._data_worker.load_error.connect(self._on_load_error)
+        self._data_worker.start()
+    
+    def _on_data_loaded(self, files: list, total_count: int):
+        """数据加载完成的回调"""
+        # 缓存数据到本地和全局缓存
+        self._cache_data(files, total_count)
+        self._global_cache.cache_files(
+            self._mode, self.current_page, files, total_count)
+        
+        # 更新显示
+        self._total_count = total_count
+        self._populate_table(files)
+        self._data_worker = None
+        self._is_loading = False
+    
+    def _on_load_error(self, error_msg: str):
+        """数据加载失败的回调"""
+        logger.error(f"加载文件失败: {error_msg}")
+        self.file_count_label.setText("加载失败")
+        self.file_table.setVisible(False)
+        self._empty_state.setVisible(True)
+        self._data_worker = None
+        self._is_loading = False
 
     def _populate_table(self, files):
         total = self._total_count

@@ -15,6 +15,7 @@ from ui.main_window import MainWindow
 from utils.logger import logger
 from config import MYSQL_CONFIG
 from utils.display_utils import get_platform_font
+from core.data_cache import GlobalDataCache
 
 _WEAK_PASSWORDS = {'123456', 'password', 'root', 'admin', '', 'CHANGE_ME_YOUR_MYSQL_PASSWORD'}
 
@@ -50,10 +51,14 @@ def main():
     # 设置全局字体（跨平台兼容）
     app.setFont(get_platform_font(10))
 
+    # 启动时预加载分类数据到内存（后台线程，不阻塞 UI）
+    cache = GlobalDataCache.get_instance()
+    cache.start_preload()
+
     window = MainWindow()
     window.show()
 
-    logger.info("应用启动完成")
+    logger.info("应用启动完成，预加载已在后台进行")
     sys.exit(app.exec())
 
 

@@ -216,6 +216,8 @@ class ScanTab(QWidget):
         else:
             self.progress_label.setVisible(False)
             self.refresh_data()
+            # 扫描完成后启动文件监控
+            self._start_watching()
 
     def _on_post_progress(self, current, total):
         self.progress_bar.setMaximum(total)
@@ -228,6 +230,8 @@ class ScanTab(QWidget):
         self.progress_bar.setVisible(False)
         self.refresh_data()
         notify(self, "后处理完成", 'success', 3000)
+        # 后处理完成后启动文件监控
+        self._start_watching()
 
     def _on_post_error(self, msg):
         self.progress_label.setText(f"后处理失败: {msg}")
@@ -276,9 +280,9 @@ class ScanTab(QWidget):
 
         # 空状态检测
         self._empty_state.setVisible(self.dir_table.rowCount() == 0)
-
-        # 启动文件监控
-        self._start_watching()
+        
+        # 注意：不在这里启动文件监控，应该在扫描完成后启动
+        # self._start_watching()  # 已移除
 
     def _delete_directory(self, dir_id):
         reply = QMessageBox.question(self, "确认", "确定要删除该扫描目录配置吗？")
@@ -306,12 +310,17 @@ class ScanTab(QWidget):
             dirs = self.scan_dao.get_all()
             if not dirs:
                 return
-            # 自动扫描最近配置的目录
+            # 只提示，不自动扫描
             dir_path = dirs[-1]['directory_path']
             if not os.path.isdir(dir_path):
                 return
-            notify(self, f"检测到新文件，自动扫描: {os.path.basename(dir_path)}", 'info', 3000)
-            self.path_label.setText(dir_path)
-            self._start_scan()
+            # 给用户一个选择，而不是直接扫描
+            notify(
+                self, 
+                f"检测到新文件，如需扫描请手动点击“开始扫描”",
+                'info', 
+                5000
+            )
+            logger.info(f"检测到文件变化，已提示用户: {dir_path}")
         except Exception as e:
-            logger.warning(f"自动扫描触发失败: {e}")
+            logger.warning(f"自动扫描提示失败: {e}")
