@@ -10,6 +10,9 @@ logs/
 # 代码索引工具（IDE 自动生成）
 .codegraph/
 
+# CodeBuddy 工作数据（仅本地使用）
+.codebuddy/
+
 # Python 缓存
 __pycache__/
 *.pyc

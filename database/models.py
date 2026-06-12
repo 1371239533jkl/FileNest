@@ -666,6 +666,24 @@ class TagDAO:
             "WHERE t.tag_name = %s AND f.status = 'active' ORDER BY t.create_time DESC",
             (tag_name.strip(),))
 
+    def get_files_by_tag_paginated(self, tag_name: str, page: int = 0, page_size: int = 100) -> list:
+        """分页获取打某个标签的文件，page 从 0 开始"""
+        offset = page * page_size
+        return self.db.execute_query(
+            "SELECT f.* FROM files f JOIN file_tags t ON f.id = t.file_id "
+            "WHERE t.tag_name = %s AND f.status = 'active' ORDER BY t.create_time DESC "
+            "LIMIT %s OFFSET %s",
+            (tag_name.strip(), page_size, offset))
+
+    def count_files_by_tag(self, tag_name: str) -> int:
+        """获取某个标签关联的活跃文件数"""
+        row = self.db.execute_one(
+            "SELECT COUNT(*) as total FROM file_tags t "
+            "JOIN files f ON f.id = t.file_id AND f.status = 'active' "
+            "WHERE t.tag_name = %s",
+            (tag_name.strip(),))
+        return row['total'] if row else 0
+
     def get_all_tags(self) -> list:
         """获取所有标签及其文件数（含独立标签），按文件数降序"""
         sql = """SELECT tg.tag_name,

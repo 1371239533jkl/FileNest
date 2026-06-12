@@ -46,6 +46,8 @@ class TagsTab(QWidget):
         self.current_files = []
         self.current_tag = None
         self.page_size = 100
+        self.current_page = 0
+        self._total_count = 0
         self._theme = 'dark'
         self._init_ui()
         self._build_cloud()
@@ -127,6 +129,29 @@ class TagsTab(QWidget):
         self.tbl.setSelectionMode(QTableWidget.SelectionMode.MultiSelection)
         self.tbl.setSortingEnabled(True)
         rv.addWidget(self.tbl)
+
+        # ── 分页控件 ──
+        pag_layout = QHBoxLayout()
+        pag_layout.setContentsMargins(0, 8, 0, 8)
+        self.prev_btn = QPushButton("上一页")
+        self.prev_btn.clicked.connect(self._prev_page)
+        self.prev_btn.setFixedHeight(30)
+        self.prev_btn.setFixedWidth(80)
+        pag_layout.addWidget(self.prev_btn)
+
+        pag_layout.addStretch()
+        self.page_label = QLabel("第 1 页 / 共 1 页")
+        self.page_label.setObjectName("subtitleLabel")
+        pag_layout.addWidget(self.page_label)
+        pag_layout.addStretch()
+
+        self.next_btn = QPushButton("下一页")
+        self.next_btn.clicked.connect(self._next_page)
+        self.next_btn.setFixedHeight(30)
+        self.next_btn.setFixedWidth(80)
+        pag_layout.addWidget(self.next_btn)
+        rv.addLayout(pag_layout)
+
         sp.addWidget(right)
         sp.setSizes([180, 820])
         layout.addWidget(sp, 1)
@@ -190,6 +215,7 @@ class TagsTab(QWidget):
 
     def _on_tag_click(self, tag_name):
         self.current_tag = tag_name
+        self.current_page = 0
         if tag_name is None:
             self._load_all()
         else:
@@ -200,6 +226,7 @@ class TagsTab(QWidget):
         self._build_cloud()
 
     def refresh_data(self):
+        self.current_page = 0
         self._build_cloud()
         if self.current_tag:
             self._load_by(self.current_tag)
@@ -210,26 +237,40 @@ class TagsTab(QWidget):
 
     def _load_all(self):
         try:
-            self._fill(self.file_dao.get_all_active())
+            self._total_count = self.file_dao.count_active()
+            files = self.file_dao.get_all_active_paginated(
+                page=self.current_page, page_size=self.page_size)
+            self._fill(files)
         except Exception as e:
             logger.error(f"加载文件失败: {e}")
 
     def _load_by(self, tn: str):
         try:
-            self._fill(self.tag_dao.get_files_by_tag(tn))
+            self._total_count = self.tag_dao.count_files_by_tag(tn)
+            files = self.tag_dao.get_files_by_tag_paginated(
+                tn, page=self.current_page, page_size=self.page_size)
+            self._fill(files)
         except Exception as e:
             logger.error(f"加载标签文件失败: {e}")
 
     def _fill(self, files):
         self.current_files = files
-        total = len(files)
-        pf = files[:self.page_size]
-        self.tbl.setRowCount(len(pf))
-        self.cnt.setText(f"共 {total} 个文件")
+        total_pages = max(1, (self._total_count + self.page_size - 1) // self.page_size)
+        if self.current_page >= total_pages:
+            self.current_page = total_pages - 1
+            # 页码越界时重新加载
+            if self.current_tag is None:
+                self._load_all()
+            else:
+                self._load_by(self.current_tag)
+            return
+
+        self.tbl.setRowCount(len(files))
+        self.cnt.setText(f"共 {self._total_count} 个文件")
         from config import FILE_TYPE_NAMES
-        fids = [f['id'] for f in pf]
+        fids = [f['id'] for f in files]
         tmap = self.tag_dao.get_all_tags_by_file(fids) if fids else {}
-        for i, f in enumerate(pf):
+        for i, f in enumerate(files):
             ft = f.get('file_type', 'other')
             it = QTableWidgetItem(get_file_icon(ft) + f['file_name'])
             it.setData(Qt.ItemDataRole.UserRole, f['id'])
@@ -241,6 +282,31 @@ class TagsTab(QWidget):
             self.tbl.setItem(i, 3, QTableWidgetItem(format_size(f['file_size'])))
             txt = ", ".join(tmap.get(f['id'], []))
             self.tbl.setItem(i, 4, QTableWidgetItem(txt or "-"))
+
+        # 更新分页状态
+        self.page_label.setText(
+            f"第 {self.current_page + 1} 页 / 共 {total_pages} 页")
+        self.prev_btn.setEnabled(self.current_page > 0)
+        self.next_btn.setEnabled(self.current_page < total_pages - 1)
+
+    # ── 翻页 ──
+
+    def _prev_page(self):
+        if self.current_page > 0:
+            self.current_page -= 1
+            if self.current_tag is None:
+                self._load_all()
+            else:
+                self._load_by(self.current_tag)
+
+    def _next_page(self):
+        total_pages = max(1, (self._total_count + self.page_size - 1) // self.page_size)
+        if self.current_page < total_pages - 1:
+            self.current_page += 1
+            if self.current_tag is None:
+                self._load_all()
+            else:
+                self._load_by(self.current_tag)
 
     # ── 操作 ──
 
