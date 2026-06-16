@@ -75,6 +75,24 @@ def is_hidden_file(file_path: str) -> bool:
     return Path(file_path).name.startswith('.')
 
 
+def _is_reparse_point(path: str) -> bool:
+    """Windows: 检测 NTFS 交接点/重解析点，避免遍历死循环
+
+    FILE_ATTRIBUTE_REPARSE_POINT (0x400) 即 NTFS 交接点（junction）、
+    符号链接、挂载点等。AppData 目录下的 'Application Data'、'History'
+    等就是典型的交接点，pathlib.rglob 会跟随它们导致无限循环。
+    """
+    if os.name != 'nt':
+        return False
+    try:
+        attrs = ctypes.windll.kernel32.GetFileAttributesW(path)
+        if attrs == -1:
+            return False
+        return bool(attrs & 0x400)  # FILE_ATTRIBUTE_REPARSE_POINT
+    except Exception:
+        return False
+
+
 def _format_eta(seconds: float) -> str:
     """将秒数格式化为友好的 ETA 字符串"""
     if seconds < 0:
@@ -114,21 +132,54 @@ class FileScanWorker(QThread):
             scan_dao = ScanDirectoryDAO(db)
 
             # 收集所有文件路径
+            # 使用 os.walk 替代 pathlib.rglob，原因：
+            # 1. os.walk 支持 onerror 回调，可优雅跳过无权限目录
+            # 2. 可实时过滤 NTFS 交接点/重解析点，避免 AppData 等目录死循环
+            # 3. topdown 模式修改 dirnames 即可跳过不需要遍历的子目录
             all_files = []
-            root_path = Path(self.directory)
             if self.recursive:
-                iterator = root_path.rglob('*')
-            else:
-                iterator = root_path.glob('*')
+                def _onerror(err):
+                    logger.warning(f"跳过无法访问的目录: {err}")
 
-            for p in iterator:
-                if self._cancelled:
+                dir_count = 0
+                for dirpath, dirnames, filenames in os.walk(
+                        self.directory, onerror=_onerror):
+                    if self._cancelled:
+                        return
+
+                    # Windows: 过滤 NTFS 交接点/重解析点，防止无限循环
+                    if os.name == 'nt':
+                        dirnames[:] = [
+                            d for d in dirnames
+                            if not _is_reparse_point(os.path.join(dirpath, d))
+                        ]
+
+                    # 收集阶段每 50 个目录发射一次进度，让用户感知扫描在进行
+                    dir_count += 1
+                    if dir_count % 50 == 0:
+                        self.progress.emit(0, 0,
+                            f"正在遍历目录 ({dir_count})... {dirpath}")
+
+                    for fname in filenames:
+                        fp = os.path.join(dirpath, fname)
+                        if not INCLUDE_HIDDEN_FILES and is_hidden_file(fp):
+                            continue
+                        all_files.append(fp)
+            else:
+                try:
+                    with os.scandir(self.directory) as it:
+                        for entry in it:
+                            if self._cancelled:
+                                return
+                            if entry.is_file():
+                                fp = entry.path
+                                if not INCLUDE_HIDDEN_FILES and is_hidden_file(fp):
+                                    continue
+                                all_files.append(fp)
+                except OSError as e:
+                    logger.error(f"无法访问目录: {self.directory} - {e}")
+                    self.error.emit(f"无法访问目录: {e}")
                     return
-                if not p.is_file():
-                    continue
-                if not INCLUDE_HIDDEN_FILES and is_hidden_file(str(p)):
-                    continue
-                all_files.append(str(p))
 
             total = len(all_files)
             new_count = 0
