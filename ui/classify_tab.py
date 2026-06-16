@@ -685,17 +685,24 @@ class ClassifyTab(QWidget):
 
         file_path = record.get('file_path', '')
         file_path = os.path.normpath(file_path) if isinstance(file_path, str) and file_path else ''
-        
+
         logger.debug(f"右键菜单 - 文件路径: {file_path}")
 
         menu = QMenu(self)
+
+        # 修复：用具名函数 + 显式参数，避免 PyQt6 QAction.triggered(bool) 默认参数陷阱
+        def _do_open_file(checked=False, fp=file_path, fid=file_id):
+            self._safe_open_file(fp, file_id=fid)
+
+        def _do_open_folder(checked=False, fp=file_path, fid=file_id):
+            self._safe_open_folder(fp, file_id=fid)
+
         open_action = QAction("打开文件", self)
-        open_action.triggered.connect(lambda fp=file_path: self._safe_open_file(fp))
+        open_action.triggered.connect(_do_open_file)
         menu.addAction(open_action)
 
         open_folder_action = QAction("打开所在文件夹", self)
-        open_folder_action.triggered.connect(
-            lambda fp=file_path: self._safe_open_folder(fp))
+        open_folder_action.triggered.connect(_do_open_folder)
         menu.addAction(open_folder_action)
 
         menu.addSeparator()
@@ -730,25 +737,47 @@ class ClassifyTab(QWidget):
 
         menu.exec(self.file_table.viewport().mapToGlobal(pos))
 
-    def _safe_open_file(self, file_path: str):
-        """安全打开文件，文件不存在时给出友好提示"""
-        logger.debug(f"尝试打开文件: {file_path}")
-        
-        # 确保 file_path 是字符串类型
-        if not isinstance(file_path, str) or not file_path:
+    def _safe_open_file(self, file_path, file_id=None):
+        """安全打开文件，文件不存在时给出友好提示
+
+        修复：兼容 file_path 为空/False/非字符串等异常情况，
+        优先尝试用 file_id 从数据库反查真实路径。
+        """
+        # 路径无效判定（兼容空串、False 字符串、None 等异常值）
+        BAD_VALUES = ('', 'False', 'True', 'false', 'true', '0', 'null', 'None')
+        needs_lookup = (
+            file_path is None
+            or not isinstance(file_path, str)
+            or file_path.strip() in BAD_VALUES
+        )
+
+        if needs_lookup and file_id is not None:
+            try:
+                rec = self.file_dao.get_by_id(file_id)
+                if rec and rec.get('file_path'):
+                    file_path = rec['file_path']
+                    logger.info(f"路径无效已用 file_id={file_id} 反查: {file_path!r}")
+            except Exception as e:
+                logger.warning(f"反查 file_id={file_id} 失败: {e}")
+
+        # 再次校验
+        if (file_path is None
+                or not isinstance(file_path, str)
+                or file_path.strip() in BAD_VALUES):
             notify(self, "无法操作：文件路径无效", 'warning', 4000)
-            logger.warning(f"文件路径无效: {file_path} (type: {type(file_path).__name__})")
+            logger.warning(
+                f"文件路径无效: {file_path!r} (type: {type(file_path).__name__})")
             return
-        
-        # 标准化路径
+
+        logger.debug(f"尝试打开文件: {file_path}")
         file_path = os.path.normpath(file_path)
         logger.debug(f"标准化后路径: {file_path}")
-        
+
         if not os.path.exists(file_path):
             notify(self, f"文件不存在: {os.path.basename(file_path)}", 'warning', 4000)
             logger.warning(f"尝试打开不存在的文件: {file_path}")
             return
-        
+
         try:
             os.startfile(file_path)
             logger.info(f"成功打开文件: {file_path}")
@@ -756,26 +785,46 @@ class ClassifyTab(QWidget):
             notify(self, f"无法打开文件: {e}", 'error', 5000)
             logger.error(f"打开文件失败: {file_path}, 错误: {e}")
 
-    def _safe_open_folder(self, file_path: str):
-        """安全打开所在文件夹"""
-        logger.debug(f"尝试打开文件夹: {file_path}")
-        
-        # 确保 file_path 是字符串类型
-        if not isinstance(file_path, str) or not file_path:
+    def _safe_open_folder(self, file_path, file_id=None):
+        """安全打开所在文件夹
+
+        修复：兼容 file_path 为空/False/非字符串等异常情况，
+        优先尝试用 file_id 从数据库反查真实路径。
+        """
+        BAD_VALUES = ('', 'False', 'True', 'false', 'true', '0', 'null', 'None')
+        needs_lookup = (
+            file_path is None
+            or not isinstance(file_path, str)
+            or file_path.strip() in BAD_VALUES
+        )
+
+        if needs_lookup and file_id is not None:
+            try:
+                rec = self.file_dao.get_by_id(file_id)
+                if rec and rec.get('file_path'):
+                    file_path = rec['file_path']
+                    logger.info(f"路径无效已用 file_id={file_id} 反查: {file_path!r}")
+            except Exception as e:
+                logger.warning(f"反查 file_id={file_id} 失败: {e}")
+
+        if (file_path is None
+                or not isinstance(file_path, str)
+                or file_path.strip() in BAD_VALUES):
             notify(self, "无法操作：文件路径无效", 'warning', 4000)
-            logger.warning(f"文件路径无效: {file_path} (type: {type(file_path).__name__})")
+            logger.warning(
+                f"文件路径无效: {file_path!r} (type: {type(file_path).__name__})")
             return
-        
-        # 标准化路径
+
+        logger.debug(f"尝试打开文件夹: {file_path}")
         file_path = os.path.normpath(file_path)
         folder = os.path.dirname(file_path)
         logger.debug(f"文件夹路径: {folder}")
-        
+
         if not folder or not os.path.exists(folder):
             notify(self, "文件所在目录已不存在", 'warning', 4000)
             logger.warning(f"文件夹不存在: {folder}")
             return
-        
+
         try:
             os.startfile(folder)
             logger.info(f"成功打开文件夹: {folder}")
@@ -1166,6 +1215,7 @@ class ClassifyTab(QWidget):
         self._preview_open_btn.setVisible(True)
         self._preview_folder_btn.setVisible(True)
         self._current_preview_path = file_path
+        self._current_preview_id = file_id
 
         try:
             self._preview_open_btn.clicked.disconnect()
@@ -1406,6 +1456,7 @@ class ClassifyTab(QWidget):
     def _clear_preview(self):
         """清空并折叠预览面板"""
         self._current_preview_path = None
+        self._current_preview_id = None
         self._preview_title.setText("文件预览")
         self._preview_stack.setCurrentIndex(0)
         self._preview_placeholder.setText("选择文件查看详情")
@@ -1430,9 +1481,9 @@ class ClassifyTab(QWidget):
     def _on_open_file_clicked(self):
         """打开文件按钮点击"""
         if hasattr(self, '_current_preview_path') and self._current_preview_path:
-            self._safe_open_file(self._current_preview_path)
+            self._safe_open_file(self._current_preview_path, file_id=getattr(self, '_current_preview_id', None))
 
     def _on_open_folder_clicked(self):
         """打开文件夹按钮点击"""
         if hasattr(self, '_current_preview_path') and self._current_preview_path:
-            self._safe_open_folder(self._current_preview_path)
+            self._safe_open_folder(self._current_preview_path, file_id=getattr(self, '_current_preview_id', None))
