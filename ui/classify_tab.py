@@ -617,6 +617,8 @@ class ClassifyTab(QWidget):
         self._is_loading = False
 
     def _populate_table(self, files):
+        # 修复：翻页/切换分类时清除上一页的选中状态，避免跨页选中残留
+        self.file_table.clearSelection()
         total = self._total_count
         total_pages = max(1, (total + self.page_size - 1) // self.page_size)
 
@@ -1033,8 +1035,7 @@ class ClassifyTab(QWidget):
         panel.setMinimumWidth(230)
         panel.setFrameShape(QFrame.Shape.StyledPanel)
         panel.setStyleSheet(
-            "QFrame { background-color: #1e1e2e; border: 1px solid #313244; "
-            "border-radius: 6px; }")
+            "QFrame { border: 1px solid #313244; border-radius: 6px; }")
 
         self._preview_layout = QVBoxLayout(panel)
         self._preview_layout.setContentsMargins(10, 10, 10, 10)
@@ -1043,7 +1044,7 @@ class ClassifyTab(QWidget):
         # 标题
         self._preview_title = QLabel("文件预览")
         self._preview_title.setStyleSheet(
-            "font-weight: bold; color: #cba6f7; font-size: 12px; "
+            "font-weight: bold; font-size: 12px;"
             "border: none; background: transparent;")
         self._preview_layout.addWidget(self._preview_title)
 
@@ -1051,49 +1052,25 @@ class ClassifyTab(QWidget):
         self._preview_stack = QStackedWidget()
         self._preview_stack.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._preview_stack.setStyleSheet(
-            "background-color: #181825; border-radius: 4px; border: none;")
 
         # 页面 0：占位提示
         self._preview_placeholder = QLabel("选择文件查看详情")
         self._preview_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._preview_placeholder.setStyleSheet(
-            "color: #585b70; font-size: 11px; background: transparent;")
         self._preview_stack.addWidget(self._preview_placeholder)
 
         # 页面 1：图片预览
         self._preview_image = QLabel()
         self._preview_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._preview_image.setStyleSheet(
-            "color: #585b70; background: transparent;")
         self._preview_stack.addWidget(self._preview_image)
 
         # 页面 2：文本 / 代码预览
         self._preview_text = QTextEdit()
         self._preview_text.setReadOnly(True)
-        self._preview_text.setStyleSheet(
-            "QTextEdit {"
-            "  color: #cdd6f4;"
-            "  background-color: #181825;"
-            "  border: none;"
-            "  font-family: 'Consolas', 'Courier New', monospace;"
-            "  font-size: 11px;"
-            "}"
-            "QScrollBar:vertical { background: #181825; width: 6px; }"
-            "QScrollBar::handle:vertical { background: #45475a; border-radius: 3px; }"
-            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
-        )
         self._preview_stack.addWidget(self._preview_text)
 
         # 页面 3：PDF 预览
         self._preview_pdf = QScrollArea()
         self._preview_pdf.setWidgetResizable(True)
-        self._preview_pdf.setStyleSheet(
-            "QScrollArea { background-color: #181825; border: none; }"
-            "QScrollBar:vertical { background: #181825; width: 6px; }"
-            "QScrollBar::handle:vertical { background: #45475a; border-radius: 3px; }"
-            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
-        )
         self._preview_pdf_container = QWidget()
         self._preview_pdf_container.setStyleSheet("background: transparent;")
         self._preview_pdf_layout = QVBoxLayout(self._preview_pdf_container)
@@ -1109,7 +1086,7 @@ class ClassifyTab(QWidget):
         self._preview_info = QLabel()
         self._preview_info.setWordWrap(True)
         self._preview_info.setStyleSheet(
-            "color: #cdd6f4; font-size: 11px; border: none; background: transparent;")
+            "font-size: 11px; border: none; background: transparent;")
         self._preview_layout.addWidget(self._preview_info)
 
         self._preview_layout.addStretch()
@@ -1117,20 +1094,10 @@ class ClassifyTab(QWidget):
         # 快捷操作按钮
         btn_layout = QHBoxLayout()
         self._preview_open_btn = QPushButton("打开")
-        self._preview_open_btn.setStyleSheet(
-            "QPushButton { background-color: #313244; color: #cdd6f4; "
-            "border: 1px solid #45475a; border-radius: 4px; "
-            "padding: 4px 8px; font-size: 11px; }"
-            "QPushButton:hover { background-color: #45475a; }")
         self._preview_open_btn.setVisible(False)
         btn_layout.addWidget(self._preview_open_btn)
 
         self._preview_folder_btn = QPushButton("打开目录")
-        self._preview_folder_btn.setStyleSheet(
-            "QPushButton { background-color: #313244; color: #cdd6f4; "
-            "border: 1px solid #45475a; border-radius: 4px; "
-            "padding: 4px 8px; font-size: 11px; }"
-            "QPushButton:hover { background-color: #45475a; }")
         self._preview_folder_btn.setVisible(False)
         btn_layout.addWidget(self._preview_folder_btn)
 
@@ -1207,7 +1174,7 @@ class ClassifyTab(QWidget):
             self._preview_stack.setCurrentIndex(0)
             self._preview_placeholder.setText(f"{get_file_icon(file_type)}\n{type_name}")
             self._preview_placeholder.setStyleSheet(
-                "color: #a6adc8; font-size: 14px; background: transparent;")
+                "font-size: 14px; background: transparent;")
             self._preview_panel.setMinimumWidth(230)
             self._splitter.setSizes([180, 580, 230])
 
@@ -1252,7 +1219,7 @@ class ClassifyTab(QWidget):
             self._preview_stack.setCurrentIndex(0)
             self._preview_placeholder.setText("无法读取文件内容")
             self._preview_placeholder.setStyleSheet(
-                "color: #585b70; font-size: 11px; background: transparent;")
+                "font-size: 11px; background: transparent;")
             return
 
         self._preview_stack.setCurrentIndex(2)
@@ -1298,7 +1265,28 @@ class ClassifyTab(QWidget):
             if ext == '.docx':
                 from docx import Document
                 doc = Document(file_path)
-                paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+                try:
+                    paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+                except AttributeError as attr_err:
+                    # python-docx 已知 bug：含内联图片的文档遍历 paragraphs
+                    # 时会触发 'list' object has no attribute 'rId'。
+                    # 回退到 lxml 直接提取所有 <w:t> 文本节点。
+                    if 'rId' in str(attr_err):
+                        logger.warning(
+                            f"python-docx paragraphs 遍历失败（rId 错误），回退 XML 提取: {attr_err}")
+                        import zipfile
+                        from lxml import etree
+                        nsmap = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+                        texts = []
+                        with zipfile.ZipFile(file_path) as zf:
+                            with zf.open('word/document.xml') as xml_f:
+                                tree = etree.parse(xml_f)
+                                for t_node in tree.iterfind('.//w:t', nsmap):
+                                    if t_node.text:
+                                        texts.append(t_node.text)
+                        paragraphs = texts[:400]  # 最多 400 个文本片段
+                    else:
+                        raise
                 content = "\n".join(paragraphs[:200])  # 最多 200 段
                 icon = "📄"
                 title_suffix = "Word 文档"
@@ -1406,8 +1394,9 @@ class ClassifyTab(QWidget):
                 page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
                 page_num_label = QLabel(f"第 {i+1}/{total_pages} 页")
+                page_subtle = "#a6adc8" if getattr(self, '_theme', 'dark') == 'dark' else "#6c7086"
                 page_num_label.setStyleSheet(
-                    "color: #a6adc8; font-size: 10px; font-weight: bold; "
+                    f"color: {page_subtle}; font-size: 10px; font-weight: bold; "
                     "border: none; background: transparent;")
                 page_num_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -1419,8 +1408,9 @@ class ClassifyTab(QWidget):
 
             if total_pages > max_pages:
                 more_label = QLabel(f"... 共 {total_pages} 页，仅预览前 {max_pages} 页")
+                page_muted = "#585b70" if getattr(self, '_theme', 'dark') == 'dark' else "#9ca0b0"
                 more_label.setStyleSheet(
-                    "color: #585b70; font-size: 10px; border: none; background: transparent;")
+                    f"color: {page_muted}; font-size: 10px; border: none; background: transparent;")
                 more_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 insert_pos = self._preview_pdf_layout.count() - 1
                 self._preview_pdf_layout.insertWidget(insert_pos, more_label)
@@ -1431,7 +1421,7 @@ class ClassifyTab(QWidget):
             self._preview_stack.setCurrentIndex(0)
             self._preview_placeholder.setText("PDF 预览需 PyMuPDF\npip install PyMuPDF")
             self._preview_placeholder.setStyleSheet(
-                "color: #585b70; font-size: 11px; background: transparent;")
+                "font-size: 11px; background: transparent;")
         except Exception as e:
             # 渲染失败则降级为 PyPDF2 文本提取
             self._preview_stack.setCurrentIndex(2)
@@ -1461,7 +1451,7 @@ class ClassifyTab(QWidget):
         self._preview_stack.setCurrentIndex(0)
         self._preview_placeholder.setText("选择文件查看详情")
         self._preview_placeholder.setStyleSheet(
-            "color: #585b70; font-size: 11px; background: transparent;")
+            "font-size: 11px; background: transparent;")
         self._preview_image.clear()
         self._preview_text.clear()
         # 清空 PDF 页面
@@ -1477,6 +1467,102 @@ class ClassifyTab(QWidget):
         if self._preview_panel.isVisible():
             self._preview_panel.setVisible(False)
             self._splitter.setSizes([180, 820, 0])
+
+    def apply_theme(self, tn: str):
+        """主题切换时更新预览面板所有控件的样式"""
+        self._theme = tn
+        is_dark = tn == 'dark'
+
+        # 颜色方案
+        panel_bg = "#1e1e2e" if is_dark else "#eff1f5"
+        panel_border = "#313244" if is_dark else "#ccd0da"
+        content_bg = "#181825" if is_dark else "#e6e9ef"
+        text_color = "#cdd6f4" if is_dark else "#4c4f69"
+        muted_color = "#585b70" if is_dark else "#9ca0b0"
+        subtle_color = "#a6adc8" if is_dark else "#6c7086"
+        accent_color = "#cba6f7" if is_dark else "#8839ef"
+        btn_bg = "#313244" if is_dark else "#ccd0da"
+        btn_hover = "#45475a" if is_dark else "#bcc0cc"
+        btn_border = "#45475a" if is_dark else "#bcc0cc"
+        scroll_bg = "#181825" if is_dark else "#e6e9ef"
+        scroll_handle = "#45475a" if is_dark else "#ccd0da"
+
+        # ── 预览面板外框 ──
+        if hasattr(self, '_preview_panel'):
+            self._preview_panel.setStyleSheet(
+                f"QFrame {{ background-color: {panel_bg}; "
+                f"border: 1px solid {panel_border}; border-radius: 6px; }}")
+
+        # ── 标题 ──
+        if hasattr(self, '_preview_title'):
+            self._preview_title.setStyleSheet(
+                f"font-weight: bold; color: {accent_color}; font-size: 12px;"
+                "border: none; background: transparent;")
+
+        # ── 预览栈背景 ──
+        if hasattr(self, '_preview_stack'):
+            self._preview_stack.setStyleSheet(
+                f"background-color: {content_bg}; border-radius: 4px; border: none;")
+
+        # ── 占位/图片标签 ──
+        if hasattr(self, '_preview_placeholder'):
+            self._preview_placeholder.setStyleSheet(
+                f"color: {muted_color}; font-size: 11px; background: transparent;")
+        if hasattr(self, '_preview_image'):
+            self._preview_image.setStyleSheet(
+                f"color: {muted_color}; background: transparent;")
+
+        # ── 文本预览 (QTextEdit) ──
+        if hasattr(self, '_preview_text'):
+            self._preview_text.setStyleSheet(
+                f"QTextEdit {{"
+                f"  color: {text_color};"
+                f"  background-color: {content_bg};"
+                "  border: none;"
+                "  font-family: 'Consolas', 'Courier New', monospace;"
+                "  font-size: 11px;"
+                f"}}"
+                f"QScrollBar:vertical {{ background: {scroll_bg}; width: 6px; }}"
+                f"QScrollBar::handle:vertical {{ background: {scroll_handle}; border-radius: 3px; }}"
+                "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }")
+
+        # ── PDF 滚动区域 ──
+        if hasattr(self, '_preview_pdf'):
+            self._preview_pdf.setStyleSheet(
+                f"QScrollArea {{ background-color: {content_bg}; border: none; }}"
+                f"QScrollBar:vertical {{ background: {scroll_bg}; width: 6px; }}"
+                f"QScrollBar::handle:vertical {{ background: {scroll_handle}; border-radius: 3px; }}"
+                "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }")
+
+        # ── 文件信息 ──
+        if hasattr(self, '_preview_info'):
+            self._preview_info.setStyleSheet(
+                f"color: {text_color}; font-size: 11px; border: none; background: transparent;")
+
+        # ── 快捷按钮 ──
+        if hasattr(self, '_preview_open_btn'):
+            self._preview_open_btn.setStyleSheet(
+                f"QPushButton {{ background-color: {btn_bg}; color: {text_color}; "
+                f"border: 1px solid {btn_border}; border-radius: 4px; "
+                "padding: 4px 8px; font-size: 11px; }"
+                f"QPushButton:hover {{ background-color: {btn_hover}; }}")
+        if hasattr(self, '_preview_folder_btn'):
+            self._preview_folder_btn.setStyleSheet(
+                f"QPushButton {{ background-color: {btn_bg}; color: {text_color}; "
+                f"border: 1px solid {btn_border}; border-radius: 4px; "
+                "padding: 4px 8px; font-size: 11px; }"
+                f"QPushButton:hover {{ background-color: {btn_hover}; }}")
+
+        # ── 刷新当前预览（如有）以更新动态样式 ──
+        if (hasattr(self, '_current_preview_path')
+                and self._current_preview_path
+                and hasattr(self, '_preview_stack')):
+            idx = self._preview_stack.currentIndex()
+            if idx == 0:
+                # 占位页面：更新颜色
+                if hasattr(self, '_preview_placeholder'):
+                    self._preview_placeholder.setStyleSheet(
+                        f"color: {muted_color}; font-size: 11px; background: transparent;")
 
     def _on_open_file_clicked(self):
         """打开文件按钮点击"""

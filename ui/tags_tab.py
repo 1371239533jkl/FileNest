@@ -254,6 +254,8 @@ class TagsTab(QWidget):
             logger.error(f"加载标签文件失败: {e}")
 
     def _fill(self, files):
+        # 修复：翻页/切换标签时清除上一页的选中状态，避免跨页选中残留
+        self.tbl.clearSelection()
         self.current_files = files
         total_pages = max(1, (self._total_count + self.page_size - 1) // self.page_size)
         if self.current_page >= total_pages:
