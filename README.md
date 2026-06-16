@@ -1,6 +1,6 @@
 <p align="center">
-  <h1 align="center">Smart File Manager</h1>
-  <p align="center">智能文件管家 — 本地文件扫描、分类、搜索、标签管理工具</p>
+  <h1 align="center">FileNest</h1>
+  <p align="center">本地文件扫描、分类、搜索、标签管理工具</p>
 </p>
 
 <p align="center">
@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/python-3.9+-blue" alt="Python">
   <img src="https://img.shields.io/badge/MySQL-5.7+-orange" alt="MySQL">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
-  <img src="https://img.shields.io/badge/platform-Windows-lightgrey" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey" alt="Platform">
 </p>
 
 ---
@@ -61,7 +61,7 @@
 
 ### 核心功能
 - **文件扫描** — 递归扫描目录，支持增量扫描跳过已处理文件
-- **智能分类** — 按文件类型、修改日期、关键词三维度自动归类
+- **智能分类** — 按文件类型、修改日期、关键词、手动标记四维度自动归类
 - **文件搜索** — 名称、类型、大小、日期、重复状态多条件检索
 - **回收区管理** — 应用内回收区（.trash/），支持恢复、永久删除、清空回收区
 - **标签管理** — 独立标签系统，标签云可视化，自由创建和批量标记
@@ -70,22 +70,28 @@
 ### v2.0 新增功能
 - **📊 磁盘空间分析** — 可视化仪表盘，展示文件类型分布、大小分布、目录占用Top10、月度趋势
 - **🔁 重复文件可视化** — 分组展示重复文件，支持单副本删除，一键释放磁盘空间
-- **📁 文件预览面板** — 分类管理中支持图片缩略图预览、元数据展示、快捷操作按钮
+- **📁 文件预览面板** — 分类管理中支持图片缩略图预览、代码语法高亮、元数据展示、快捷操作按钮
+- **👀 文件变化监控** — 基于 watchdog 实时监控已扫描目录的文件新增/修改/删除
+- **⚡ 数据缓存预加载** — 启动时后台加载分类树和文件数据，分类管理页零延迟切换
 
 ### 体验优化
 - **双主题** — 深色/浅色主题一键切换，Catppuccin 配色方案
 - **操作反馈** — 顶部 Toast 通知 + 底部状态栏双重反馈，不阻塞操作
-- **服务端分页** — 大数据量场景下流畅浏览，降低内存占用
+- **服务端分页** — 所有列表页均支持分页，大数据量场景下流畅浏览，降低内存占用
+- **首次引导** — 首次启动展示功能引导对话框，帮助快速上手
 
 ## 技术栈
 
 | 层 | 技术 |
 |----|------|
 | 前端 | PyQt6 |
-| 数据库 | MySQL 5.7+ |
+| 数据库 | MySQL 5.7+（PyMySQL） |
 | 哈希去重 | SHA256 / MD5 |
 | 回收区 | 应用本地 .trash/（shutil） |
-| 元数据提取 | Pillow, PyPDF2 |
+| 元数据提取 | Pillow, PyPDF2, PyMuPDF, python-docx, python-pptx |
+| 文件监控 | watchdog |
+| 代码预览 | pygments |
+| 环境变量 | python-dotenv |
 
 ## 安装
 
@@ -93,14 +99,28 @@
 
 - Python 3.9 或更高版本
 - MySQL 5.7 或更高版本（默认本地 3306 端口）
-- Windows 操作系统
+- Windows / macOS / Linux 均可运行
+
+### 依赖说明
+
+| 包 | 用途 |
+|----|------|
+| PyQt6 | GUI 框架 |
+| PyMySQL | MySQL 数据库连接 |
+| Pillow | 图片处理、EXIF 提取 |
+| PyPDF2 + PyMuPDF | PDF 属性提取 |
+| python-docx | Word 文档处理 |
+| python-pptx | PowerPoint 文档处理 |
+| watchdog | 文件系统变化实时监控 |
+| pygments | 代码文件语法高亮预览 |
+| python-dotenv | .env 环境变量加载 |
 
 ### 步骤
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/1371239533jkl/smart-file-manager.git
-cd smart-file-manager
+git clone https://github.com/1371239533jkl/FileNest.git
+cd FileNest
 
 # 2. 安装依赖
 pip install -r requirements.txt
@@ -135,7 +155,7 @@ SMART_FM_DB_PASSWORD=你的MySQL密码
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  Smart File Manager          [🌙 浅色]  v2.0    │
+│  FileNest                     [🌙 浅色]  v2.0    │
 ├──────┬──────────────────────────────────────────┤
 │ 📊 仪表盘 │                                    │
 │ 📂 扫描管理 │                                    │
@@ -251,6 +271,7 @@ SMART_FM_DB_PASSWORD=你的MySQL密码
 | 条件 | 说明 |
 |------|------|
 | 文件名 | 模糊匹配 |
+| 扩展名 | 按文件扩展名精确筛选 |
 | 类型 | 下拉选择文件分类 |
 | 大小范围 | 最小值(KB) / 最大值(MB)，填 0 表示不限制 |
 | 重复文件 | 全部 / 仅显示重复 / 仅显示不重复 |
@@ -298,11 +319,12 @@ SMART_FM_DB_PASSWORD=你的MySQL密码
 |------|------|
 | **新建标签** | 创建独立标签，不需要选中文件 |
 | 标签云 → 点击 | 筛选该标签关联的文件 |
-| **打标签** | 选中文件后输入标签名添加 |
+| **打标签** | 选中文件后输入标签名添加（支持多标签，逗号分隔） |
 | **移除标签** | 从选中文件中移除指定标签 |
 | **删除标签** | 删除标签及其所有关联 |
+| 分页浏览 | 标签关联文件列表支持分页，每页 100 条 |
 
-标签云中标签的颜色和字体大小根据关联文件数量自动变化。
+标签云按钮垂直排列，颜色和字号根据关联文件数量自动变化。
 
 ---
 
@@ -324,50 +346,72 @@ SMART_FM_DB_PASSWORD=你的MySQL密码
 ## 项目结构
 
 ```
-smart-file-manager/
+FileNest/
 ├── main.py                 # 应用入口
 ├── config.py               # 全局配置（版本号/数据库/文件类型/规则）
-├── init_database.sql       # 数据库建表脚本
-├── requirements.txt        # 依赖清单
+├── init_database.sql       # 数据库建表脚本（9张表 + 默认设置 + 默认分类规则）
+├── requirements.txt        # 依赖清单（10个包）
+├── USER_GUIDE.md           # 用户操作指南
 ├── .env                    # 数据库密码（gitignored）
 ├── core/                   # 核心业务逻辑
-│   ├── file_scanner.py     # 文件扫描
-│   ├── file_classifier.py  # 智能分类
+│   ├── __init__.py         # 统一导出
+│   ├── file_scanner.py     # 文件扫描（增量/哈希/ETA估算）
+│   ├── file_classifier.py  # 四维智能分类（类型/日期/关键词/手动）
 │   ├── file_manager.py     # 文件操作（重命名/移动/删除/恢复/永久删除）
-│   ├── batch_classifier.py # 批量分类 Worker（共享）
-│   ├── operation_history.py# 操作历史与撤销
-│   ├── tag_manager.py      # 标签管理
-│   └── dedup_manager.py    # 去重
+│   ├── dedup_manager.py    # 去重管理（SHA256分组/策略去重）
+│   ├── metadata_extractor.py # 元数据提取（EXIF/PDF属性/视频信息）
+│   ├── operation_history.py  # 操作历史记录与撤销
+│   ├── tag_manager.py      # 标签管理（创建/删除/重命名/批量打标）
+│   ├── file_watcher.py     # 文件变化监控（watchdog + 防抖）
+│   ├── data_cache.py       # 全局数据缓存（后台预加载）
+│   └── batch_classifier.py # 批量分类 Worker（共享线程）
 ├── ui/                     # 界面层
-│   ├── main_window.py      # 主窗口
-│   ├── dashboard_tab.py    # 磁盘空间分析仪表盘（v2.0）
-│   ├── scan_tab.py         # 扫描页面
-│   ├── classify_tab.py     # 分类页面（含预览面板，v2.0）
-│   ├── search_tab.py       # 搜索页面
-│   ├── history_tab.py      # 历史页面
-│   ├── recycle_bin_tab.py  # 回收区页面
-│   ├── duplicates_tab.py   # 重复文件可视化（v2.0）
-│   ├── tags_tab.py         # 标签页面
-│   ├── settings_tab.py     # 设置页面
-│   ├── chart_widgets.py    # 轻量图表组件库（v2.0）
-│   ├── styles.py           # 双主题样式
-│   ├── toast.py            # 通知组件
+│   ├── main_window.py      # 主窗口（侧边导航 + 9个标签页）
+│   ├── dashboard_tab.py    # 仪表盘（4统计卡片 + 4图表）
+│   ├── scan_tab.py         # 扫描管理（目录配置/进度/ETA）
+│   ├── classify_tab.py     # 分类管理（树形导航/文件列表/预览面板）
+│   ├── search_tab.py       # 文件搜索（多条件组合/分页/CSV导出）
+│   ├── history_tab.py      # 操作历史（筛选/单条撤销/批次撤销）
+│   ├── recycle_bin_tab.py  # 回收区（恢复/永久删除/清空）
+│   ├── duplicates_tab.py   # 重复文件（分组展示/逐副本删除）
+│   ├── tags_tab.py         # 标签管理（标签云/分页/批量操作）
+│   ├── settings_tab.py     # 系统设置（通用/扫描/重命名/去重策略）
+│   ├── chart_widgets.py    # 图表组件（StatCard/Pie/Bar/TrendChart）
+│   ├── empty_state.py      # 空状态引导组件
 │   ├── flow_layout.py      # 流式布局
-│   └── theme_manager.py    # 主题管理
+│   ├── onboarding.py       # 首次启动引导对话框
+│   ├── styles.py           # 双主题 QSS 样式（Catppuccin）
+│   ├── theme_manager.py    # 主题管理器
+│   └── toast.py            # Toast 通知组件
 ├── database/               # 数据访问层
-│   ├── db_manager.py       # 数据库连接
-│   └── models.py           # DAO 层（692行，含分页/分析/重复查询）
+│   ├── __init__.py
+│   ├── db_manager.py       # MySQL 连接管理（线程安全/SafeDictCursor）
+│   └── models.py           # DAO 层（FileDAO/TagDAO/分页/分析/统计）
 ├── utils/                  # 工具函数
-│   ├── logger.py           # 日志
+│   ├── __init__.py
+│   ├── logger.py           # 日志（RotatingFileHandler）
 │   ├── date_utils.py       # 日期处理
-│   ├── display_utils.py    # 格式化显示
-│   └── signal_bus.py       # 全局信号总线
-└── tests/                  # 测试
-    ├── test_display_utils.py
-    ├── test_date_utils.py
-    ├── test_file_manager.py      # 回收区操作测试
-    ├── test_operation_history.py # 撤销操作测试
-    └── run_all_tests.py     # 一键运行全部测试
+│   ├── display_utils.py    # 格式化显示（大小/路径/图标/颜色/字体）
+│   └── signal_bus.py       # 全局信号总线（模块解耦通信）
+├── migrations/             # 数据库迁移
+│   ├── add_unique_file_path.sql
+│   ├── fix_duplicate_classifications.sql
+│   └── fix_duplicate_classifications.py
+├── scripts/                # 辅助脚本
+│   └── clear_all_data.py   # 一键清空所有数据
+├── tests/                  # 测试（9个文件）
+│   ├── conftest.py         # Pytest 全局 fixtures
+│   ├── run_all_tests.py    # 综合测试入口（5阶段）
+│   ├── test_date_utils.py
+│   ├── test_display_utils.py
+│   ├── test_file_classifier.py
+│   ├── test_file_manager.py
+│   ├── test_operation_history.py
+│   └── test_phase3.py      # ETA/空状态/文件监控测试
+└── docs/                   # 文档与截图
+    ├── screenshot_main.png
+    ├── screenshot_scan.png
+    └── screenshot_tags.png
 ```
 
 ---
