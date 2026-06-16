@@ -45,6 +45,10 @@ def main():
     _check_password()
     logger.info("启动智能文件管家...")
 
+    # 启用高 DPI 适配（Windows 125%/150%/200% 缩放下字体和图片清晰度关键）
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 

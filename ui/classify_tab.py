@@ -1202,10 +1202,14 @@ class ClassifyTab(QWidget):
         try:
             pixmap = QPixmap(file_path)
             if not pixmap.isNull():
+                # 高 DPI 适配：按屏幕像素比增大渲染画布，避免缩放模糊
+                dpr = self.devicePixelRatio()
+                base_w, base_h = 280, 200
                 scaled = pixmap.scaled(
-                    QSize(210, 140),
+                    QSize(int(base_w * dpr), int(base_h * dpr)),
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation)
+                scaled.setDevicePixelRatio(dpr)
                 self._preview_image.setPixmap(scaled)
             else:
                 self._preview_image.setText("无法加载图片")
@@ -1377,7 +1381,9 @@ class ClassifyTab(QWidget):
             doc = fitz.open(file_path)
             total_pages = doc.page_count
             max_pages = min(total_pages, 20)
-            preview_width = 350
+            # 高 DPI：按屏幕像素比放大渲染，确保 PDF 文字清晰
+            dpr = self.devicePixelRatio()
+            preview_width = int(350 * dpr)
 
             for i in range(max_pages):
                 page = doc[i]
@@ -1388,6 +1394,7 @@ class ClassifyTab(QWidget):
 
                 page_pixmap = QPixmap()
                 page_pixmap.loadFromData(img_data)
+                page_pixmap.setDevicePixelRatio(dpr)
 
                 page_label = QLabel()
                 page_label.setPixmap(page_pixmap)
