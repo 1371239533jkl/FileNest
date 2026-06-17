@@ -173,37 +173,41 @@ class TagsTab(QWidget):
         has_tags = len(tags) > 0
         self._empty_state.setVisible(not has_tags)
 
-        # 全部文件
-        all_btn = self._make_btn("全部文件", 13, '#313244', '#cdd6f4', False)
+        # 全部文件 —— 使用调色板配色，与普通标签风格统一
+        all_bg, all_fg = ('#585b70', '#cdd6f4') if self._theme == 'light' else ('#45475a', '#cdd6f4')
+        all_btn = self._make_btn(" 全部文件 ", all_bg, all_fg)
         all_btn.clicked.connect(lambda: self._on_tag_click(None))
         self.cloud_layout.addWidget(all_btn)
 
-        counts = [t['file_count'] for t in tags] if tags else []
-        mx = max(counts) if counts else 1
-        mn = min(counts) if counts else 0
-
         for t in tags:
             nm = t['tag_name']
-            fc = t['file_count']
-            pt = 13 if mx == mn else 11 + int((fc - mn) / (mx - mn) * 11)
             bg, fg = palette[_ci(nm)]
 
-            btn = self._make_btn(f" {nm} ", pt, bg, fg, fc == mx)
+            btn = self._make_btn(f" {nm} ", bg, fg)
             btn.clicked.connect(lambda checked, n=nm: self._on_tag_click(n))
             self.cloud_layout.addWidget(btn)
 
         self.cloud_layout.addStretch()  # 底部弹簧，标签按钮从顶部开始
 
-    def _make_btn(self, text: str, pt: int, bg: str, fg: str, bold: bool) -> QPushButton:
+    def _make_btn(self, text: str, bg: str, fg: str, pt: int = 13) -> QPushButton:
         btn = QPushButton(text)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setFixedHeight(pt + 18)
         btn.setMinimumHeight(32)
+        radius = max(8, pt + 2)
+        # 显式覆盖全局 QPushButton 的 border / hover / pressed，防止样式穿透
         btn.setStyleSheet(
-            f"QPushButton {{ background: {bg}; color: {fg}; "
-            f"border: none; border-radius: {max(8, pt + 2)}px; "
-            f"text-align: left; padding: 4px 12px; "
-            f"font-size: {pt}pt; {'font-weight: bold;' if bold else ''}}}"
+            f"QPushButton {{"
+            f"  background-color: {bg};"
+            f"  color: {fg};"
+            f"  border: none;"
+            f"  border-radius: {radius}px;"
+            f"  text-align: left;"
+            f"  padding: 4px 12px;"
+            f"  font-size: {pt}pt;"
+            f"}}"
+            f"QPushButton:hover {{ background-color: {bg}; }}"
+            f"QPushButton:pressed {{ background-color: {bg}; }}"
         )
         return btn
 

@@ -14,6 +14,7 @@ import os
 import csv
 from config import FILE_TYPE_NAMES
 from core import FileManager
+from core.rule_engine import NLSearchParser
 from database.db_manager import db
 from database.models import FileDAO
 from utils.display_utils import format_size, truncate_path, get_file_icon, get_file_color
@@ -27,6 +28,7 @@ class SearchTab(QWidget):
         super().__init__(parent)
         self.file_dao = FileDAO(db)
         self.file_manager = FileManager()
+        self.nl_parser = NLSearchParser()
         self.page_size = 100
         self.current_page = 0
         self.total_count = 0
@@ -38,8 +40,23 @@ class SearchTab(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(8)
 
+        # ── 自然语言搜索行 ──
+        nl_row = QHBoxLayout()
+        nl_label = QLabel("智能搜索:")
+        nl_label.setToolTip("支持自然语言，如「大于100MB的图片」「上周的PDF文档」「重复文件」")
+        nl_row.addWidget(nl_label)
+        self.nl_input = QLineEdit()
+        self.nl_input.setPlaceholderText("试试说: 大于100MB的图片 | 上周的文档 | 桌面上的重复文件...")
+        self.nl_input.returnPressed.connect(self._do_nl_search)
+        nl_row.addWidget(self.nl_input)
+        self.nl_search_btn = QPushButton("智能搜索")
+        self.nl_search_btn.setObjectName("primaryBtn")
+        self.nl_search_btn.clicked.connect(self._do_nl_search)
+        nl_row.addWidget(self.nl_search_btn)
+        layout.addLayout(nl_row)
+
         # 搜索条件区
-        search_group = QGroupBox("搜索条件")
+        search_group = QGroupBox("高级搜索条件")
         search_layout = QVBoxLayout(search_group)
 
         # 第一行: 文件名搜索
@@ -183,6 +200,101 @@ class SearchTab(QWidget):
         self.start_date.setEnabled(checked)
         self.end_date.setEnabled(checked)
 
+    def _do_nl_search(self):
+        """智能搜索：解析自然语言查询并自动填充条件 + 执行搜索"""
+        query = self.nl_input.text().strip()
+        if not query:
+            notify(self, "请输入自然语言查询，如「大于100MB的图片」", 'info', 3000)
+            return
+
+        try:
+            params = self.nl_parser.parse(query)
+            if not params:
+                notify(self, "未能理解您的查询，请尝试更明确的描述", 'warning', 3000)
+                return
+
+            # 用解析结果填充高级搜索字段
+            self._apply_nl_params(params)
+
+            # 显示解析说明
+            explanation = self.nl_parser.explain(query)
+            notify(self, f"智能解析: {explanation}", 'success', 4000)
+
+            self.current_page = 0
+            self._load_page()
+        except Exception as e:
+            logger.error(f"NL搜索解析失败: {e}")
+            QMessageBox.warning(self, "智能搜索", f"解析失败: {e}")
+
+    def _apply_nl_params(self, params: dict):
+        """将 NL 解析结果填充到高级搜索 UI 控件"""
+        self._search_params = {}
+
+        if 'name' in params:
+            self.name_input.setText(params['name'])
+            self._search_params['name'] = params['name']
+        else:
+            self.name_input.clear()
+            self._search_params['name'] = None
+
+        if 'file_type' in params:
+            ft = params['file_type']
+            idx = self.type_combo.findData(ft)
+            if idx >= 0:
+                self.type_combo.setCurrentIndex(idx)
+            self._search_params['file_type'] = ft
+        else:
+            self.type_combo.setCurrentIndex(0)
+            self._search_params['file_type'] = None
+
+        if 'extension' in params:
+            self._search_params['extension'] = params['extension']
+        else:
+            self._search_params['extension'] = None
+
+        if 'min_size' in params:
+            kb_val = max(0, params['min_size'] // 1024)
+            self.min_size.setValue(min(kb_val, 999999999))
+            self._search_params['min_size'] = params['min_size']
+        else:
+            self.min_size.setValue(0)
+            self._search_params['min_size'] = None
+
+        if 'max_size' in params:
+            mb_val = max(0, (params['max_size'] + 1024 * 1024 - 1) // (1024 * 1024))
+            self.max_size.setValue(min(mb_val, 999999))
+            self._search_params['max_size'] = params['max_size']
+        else:
+            self.max_size.setValue(0)
+            self._search_params['max_size'] = None
+
+        if 'start_date' in params:
+            try:
+                d = QDate.fromString(params['start_date'][:10], 'yyyy-MM-dd')
+                self.start_date.setDate(d)
+                self.use_date_cb.setChecked(True)
+                self._search_params['start_date'] = params['start_date']
+            except Exception:
+                self.use_date_cb.setChecked(False)
+                self._search_params['start_date'] = None
+        else:
+            self.use_date_cb.setChecked(False)
+            self._search_params['start_date'] = None
+
+        if 'end_date' in params:
+            self._search_params['end_date'] = params['end_date']
+        else:
+            self._search_params['end_date'] = None
+
+        if 'is_duplicate' in params:
+            idx = self.dup_combo.findData(params['is_duplicate'])
+            if idx >= 0:
+                self.dup_combo.setCurrentIndex(idx)
+            self._search_params['is_duplicate'] = params['is_duplicate']
+        else:
+            self.dup_combo.setCurrentIndex(0)
+            self._search_params['is_duplicate'] = None
+
     def _do_search(self):
         self._search_params = {
             'name': self.name_input.text().strip() or None,
@@ -277,6 +389,7 @@ class SearchTab(QWidget):
             self._load_page()
 
     def _reset_search(self):
+        self.nl_input.clear()
         self.name_input.clear()
         self.type_combo.setCurrentIndex(0)
         self.min_size.setValue(0)

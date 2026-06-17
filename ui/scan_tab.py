@@ -4,7 +4,7 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QFileDialog, QProgressBar, QTableWidget, QTableWidgetItem,
-    QCheckBox, QMessageBox, QHeaderView
+    QCheckBox, QMessageBox, QHeaderView, QApplication
 )
 from PyQt6.QtCore import Qt
 
@@ -12,9 +12,10 @@ import os
 from core import FileScanWorker
 from core.batch_classifier import BatchClassifyWorker
 from core.file_watcher import WatcherManager
+from core.rule_engine import CleanupAdvisor
 from database.db_manager import db
-from database.models import FileDAO, MetadataDAO, ScanDirectoryDAO
-from utils.display_utils import truncate_path
+from database.models import FileDAO, MetadataDAO, ScanDirectoryDAO, TagDAO, ClassificationDAO
+from utils.display_utils import truncate_path, format_size
 from utils.logger import logger
 from ui.toast import notify
 from ui.empty_state import create_empty_state
@@ -90,6 +91,11 @@ class ScanTab(QWidget):
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self._cancel_scan)
         btn_layout.addWidget(self.cancel_btn)
+
+        self.cleanup_btn = QPushButton("清理建议")
+        self.cleanup_btn.setToolTip("分析重复文件、长期未修改文件、临时文件等，生成磁盘清理建议")
+        self.cleanup_btn.clicked.connect(self._show_cleanup_report)
+        btn_layout.addWidget(self.cleanup_btn)
 
         btn_layout.addStretch()
 
@@ -174,6 +180,56 @@ class ScanTab(QWidget):
             self.cancel_btn.setEnabled(False)
             self.stats_label.setText("扫描已取消")
             self.eta_label.setVisible(False)
+
+    def _show_cleanup_report(self):
+        """分析数据库中的文件并展示清理建议报告"""
+        try:
+            self.cleanup_btn.setEnabled(False)
+            self.cleanup_btn.setText("分析中...")
+
+            QApplication.processEvents()
+
+            advisor = CleanupAdvisor(
+                file_dao=self.file_dao,
+                tag_dao=TagDAO(db),
+                cls_dao=ClassificationDAO(db),
+            )
+            report = advisor.analyze()
+
+            if not report or not report['categories']:
+                QMessageBox.information(self, "清理建议", "未发现需要清理的文件，磁盘状况良好！")
+                return
+
+            # 构建报告
+            total_active = report['total_active_files']
+            total_size = format_size(report['total_size'])
+            total_savings = format_size(report['total_potential_savings'])
+
+            lines = [
+                f"共 {total_active} 个活跃文件，占用 {total_size}",
+                f"预计可释放约 {total_savings} 空间\n",
+            ]
+
+            severity_icons = {'high': '🔴', 'medium': '🟡', 'low': '🟢', 'info': '🔵'}
+            for cat in report['categories']:
+                icon = severity_icons.get(cat.get('severity', 'info'), '🔵')
+                category = cat.get('category', '未知')
+                desc = cat.get('description', '')
+                action = cat.get('action', '')
+                lines.append(f"{icon} {category}")
+                lines.append(f"   {desc}")
+                lines.append(f"   建议: {action}\n")
+
+            QMessageBox.information(
+                self, "磁盘清理建议报告",
+                "\n".join(lines))
+
+        except Exception as e:
+            logger.error(f"清理建议分析失败: {e}")
+            QMessageBox.critical(self, "清理建议", f"分析失败: {e}")
+        finally:
+            self.cleanup_btn.setEnabled(True)
+            self.cleanup_btn.setText("清理建议")
 
     def _on_progress(self, current, total, path):
         self.progress_bar.setMaximum(total)

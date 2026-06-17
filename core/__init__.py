@@ -9,3 +9,4 @@ from core.metadata_extractor import extract_metadata, extract_image_metadata, ex
 from core.operation_history import OperationHistoryManager
 from core.tag_manager import TagManager
 from core.file_watcher import DirectoryWatcher, WatcherManager, FileChangeEvent
+from core.rule_engine import RuleEngine, NLSearchParser, TagRecommender, CleanupAdvisor
