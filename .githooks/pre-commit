@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""Pre-commit hook: 扫描即将提交的文件，阻止包含疑似 API Key 的内容"""
+import os
+import re
+import subprocess
+import sys
+
+# ── 敏感模式 ──
+PATTERNS = [
+    (r'sk-[a-zA-Z0-9]{32,}', '疑似 API Key (sk-...)'),
+    (r'api[_-]?key\s*[:=]\s*[\'"][^\'"]{20,}[\'"]', '明文 API Key'),
+    (r'SMART_FM_AI_KEY\s*=\s*sk-', '.env 外泄露的 AI Key'),
+    (r'BOCHA_API_KEY\s*=\s*sk-', '.env 外泄露的 Bocha Key'),
+]
+
+# 允许 .env 文件包含 Key（不在本次检查范围）
+ALLOWED_FILES = {'.env'}
+
+def scan_file(filepath):
+    """扫描单个文件，返回包含的违规行列表"""
+    issues = []
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+            for lineno, line in enumerate(f, 1):
+                for pattern, desc in PATTERNS:
+                    if re.search(pattern, line, re.IGNORECASE):
+                        issues.append((lineno, desc, line.strip()[:80]))
+    except Exception:
+        pass
+    return issues
+
+def main():
+    # 获取暂存区中新添加或修改的文件
+    result = subprocess.run(
+        ['git', 'diff', '--cached', '--name-only', '--diff-filter=ACM'],
+        capture_output=True, text=True
+    )
+    files = [f.strip() for f in result.stdout.split('\n') if f.strip()]
+
+    all_issues = {}
+    for f in files:
+        basename = os.path.basename(f)
+        if basename in ALLOWED_FILES or f in ALLOWED_FILES:
+            continue
+        issues = scan_file(f)
+        if issues:
+            all_issues[f] = issues
+
+    if not all_issues:
+        sys.exit(0)
+
+    print("\n⚠️  检测到疑似 API Key 泄露，提交已阻止：\n")
+    for f, issues in all_issues.items():
+        print(f"  {f}:")
+        for lineno, desc, snippet in issues:
+            print(f"    行 {lineno}: [{desc}]")
+            print(f"    → {snippet}\n")
+
+    print("请将 API Key 移至 .env 文件，然后在源码中使用环境变量读取。")
+    print("如需跳过检查（不推荐）：git commit --no-verify\n")
+    sys.exit(1)
+
+if __name__ == '__main__':
+    main()
