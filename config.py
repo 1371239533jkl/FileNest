@@ -103,4 +103,7 @@ AI_CONFIG = {
     'model': 'deepseek-chat',
     'base_url': 'https://api.deepseek.com/v1',
     'timeout': 60,  # 秒
+    # 博查 Web Search API Key（免费 2000次/月，注册: https://open.bochaai.com）
+    # 设置环境变量 BOCHA_API_KEY 或在这里填写
+    'bocha_api_key': os.getenv('BOCHA_API_KEY', ''),
 }

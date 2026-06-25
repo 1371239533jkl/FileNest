@@ -43,22 +43,48 @@ class SearchTab(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(8)
 
-        # ── AI 搜索触发按钮 ──
+        # ── AI 自然语言搜索栏 ──
         ai_row = QHBoxLayout()
-        ai_row.addStretch()
-        self.ai_search_btn = QPushButton("🤖 AI 搜索")
-        self.ai_search_btn.setObjectName("aiSearchBtn")
-        self.ai_search_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.ai_search_btn.setToolTip("打开全屏 AI 对话搜索，支持自然语言描述文件需求")
-        self.ai_search_btn.clicked.connect(self.ai_search_clicked.emit)
-        self.ai_search_btn.setStyleSheet(
+        ai_row.setSpacing(10)
+        self.nl_input = QLineEdit()
+        self.nl_input.setPlaceholderText("用自然语言描述，如：近一年的文档、大于100MB的图片...（本地规则引擎解析）")
+        self.nl_input.setFixedHeight(38)
+        self.nl_input.returnPressed.connect(self._do_nl_search)
+        self.nl_input.setStyleSheet(
+            "QLineEdit {"
+            "  border: 2px solid #89b4fa; border-radius: 8px; padding: 4px 14px; font-size: 11pt;"
+            "}"
+        )
+        ai_row.addWidget(self.nl_input, 1)
+
+        self.nl_search_btn = QPushButton("🔍 解读")
+        self.nl_search_btn.setObjectName("aiSearchBtn")
+        self.nl_search_btn.setFixedHeight(38)
+        self.nl_search_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.nl_search_btn.setToolTip("规则引擎解析自然语言为搜索条件")
+        self.nl_search_btn.clicked.connect(self._do_nl_search)
+        self.nl_search_btn.setStyleSheet(
             "QPushButton#aiSearchBtn {"
             "  background: #89b4fa; color: #1e1e2e; border: none;"
             "  border-radius: 8px; padding: 8px 20px; font-weight: bold; font-size: 11pt;"
             "}"
             "QPushButton#aiSearchBtn:hover { background: #b4d0fb; }"
         )
-        ai_row.addWidget(self.ai_search_btn)
+        ai_row.addWidget(self.nl_search_btn)
+
+        self.ai_chat_btn = QPushButton("💬 AI 对话")
+        self.ai_chat_btn.setFixedHeight(38)
+        self.ai_chat_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.ai_chat_btn.setToolTip("打开 AI 对话式搜索，支持联网")
+        self.ai_chat_btn.clicked.connect(self.ai_search_clicked.emit)
+        self.ai_chat_btn.setStyleSheet(
+            "QPushButton {"
+            "  background: #cba6f7; color: #1e1e2e; border: none;"
+            "  border-radius: 8px; padding: 8px 14px; font-weight: bold; font-size: 10pt;"
+            "}"
+            "QPushButton:hover { background: #d4bfff; }"
+        )
+        ai_row.addWidget(self.ai_chat_btn)
         layout.addLayout(ai_row)
 
         # 搜索条件区
@@ -225,10 +251,9 @@ class SearchTab(QWidget):
         if not self._search_params:
             return
 
-        # AI 模式：从内存分页
-        if self._search_params.get("_ai_mode"):
-            self._ai_load_page()
-            return
+        # AI 来源的结果也用正常分页
+        self._search_params.pop("_ai_mode", None)
+        self._search_params.pop("_ai_files", None)
 
         try:
             # 查总数（只在第一页时查询，缓存结果）
@@ -306,6 +331,67 @@ class SearchTab(QWidget):
             self.current_page += 1
             self._load_page()
 
+    def _do_nl_search(self):
+        """自然语言搜索：使用规则引擎解析为结构化参数"""
+        query = self.nl_input.text().strip()
+        if not query:
+            return
+
+        self.result_label.setText("🔍 正在解析...")
+        self.result_label.setStyleSheet("color: #89b4fa; font-weight: bold; font-size: 13px;")
+
+        params = self.nl_parser.parse(query)
+        if params:
+            self._apply_search_params(params, source="规则")
+        else:
+            self.result_label.setText("无法解析，请尝试更明确的描述或使用高级搜索条件。")
+            self.result_label.setStyleSheet("color: #f38ba8; font-size: 13px;")
+
+    def _apply_search_params(self, params: dict, source: str = ""):
+        """将 AI 解析的参数填入搜索条件并执行搜索"""
+        # 排除内部字段
+        self._search_params = {
+            'name': params.get('name'),
+            'file_type': params.get('file_type'),
+            'min_size': params.get('min_size'),
+            'max_size': params.get('max_size'),
+            'start_date': params.get('start_date'),
+            'end_date': params.get('end_date'),
+            'is_duplicate': params.get('is_duplicate'),
+        }
+        # 同步到 UI 控件
+        self.name_input.setText(params.get('name') or '')
+        if params.get('file_type'):
+            idx = self.type_combo.findData(params['file_type'])
+            if idx >= 0:
+                self.type_combo.setCurrentIndex(idx)
+        if params.get('min_size'):
+            self.min_size.setValue(max(0, params['min_size'] // 1024))
+        if params.get('max_size'):
+            self.max_size.setValue(max(0, params['max_size'] // (1024 * 1024)))
+        if params.get('start_date') or params.get('end_date'):
+            self.use_date_cb.setChecked(True)
+            if params.get('start_date'):
+                try:
+                    self.start_date.setDate(QDate.fromString(params['start_date'][:10], "yyyy-MM-dd"))
+                except Exception:
+                    pass
+            if params.get('end_date'):
+                try:
+                    self.end_date.setDate(QDate.fromString(params['end_date'][:10], "yyyy-MM-dd"))
+                except Exception:
+                    pass
+
+        self.current_page = 0
+        self.total_count = 0
+        self._load_page()
+        explanation = params.get('explanation', '')
+        source_text = f" ({source})" if source else ""
+        self.result_label.setText(f"🤖 {explanation or 'AI 解读完成'}{source_text}")
+        self.result_label.setStyleSheet("color: #a6e3a1; font-weight: bold; font-size: 13px;")
+
+
+
     def _reset_search(self):
         self.name_input.clear()
         self.type_combo.setCurrentIndex(0)
@@ -326,38 +412,19 @@ class SearchTab(QWidget):
         self.export_btn.setVisible(False)
 
     def display_ai_results(self, result: dict):
-        """接收 AI 搜索结果，填充到表格并阻止后续覆写
-
-        Args:
-            result: {"files": [...], "total": N, "params": {...}}
-        """
-        files = result.get("files", [])
-        total = result.get("total", len(files))
-
-        if not files:
-            self.result_label.setText("AI 搜索没有找到匹配的文件")
-            return
-
-        # 存入内存，用于本地翻页
-        self._ai_files = files
-        self.total_count = total
-        self.current_page = 0
-        self._search_params = {"_ai_mode": True}  # 标记为 AI 模式
-
-        # 填充当前页
-        self._ai_load_page()
-
-        # 显示提示
-        query = getattr(self, '_ai_query_hint', 'AI 搜索')
-        self.result_label.setText(f"🤖 {query} → 共 {total} 个文件")
-
-    def _ai_load_page(self):
-        """AI 模式下的本地分页"""
-        files = getattr(self, '_ai_files', [])
-        start = self.current_page * self.page_size
-        end = start + self.page_size
-        page_files = files[start:end]
-        self._populate_results(page_files)
+        """接收 AI 搜索结果，通过数据库分页展示到表格"""
+        params = result.get("params", {})
+        # 从 AI 解析结果提取结构化条件
+        clean = {
+            'name': params.get('name'),
+            'file_type': params.get('file_type'),
+            'min_size': params.get('min_size'),
+            'max_size': params.get('max_size'),
+            'start_date': params.get('start_date'),
+            'end_date': params.get('end_date'),
+        }
+        clean = {k: v for k, v in clean.items() if v is not None}
+        self._apply_search_params(clean, source="ai")
 
     def _show_context_menu(self, pos):
         """搜索列表右键菜单"""
@@ -819,3 +886,6 @@ class SearchTab(QWidget):
             notify(self, f"已导出 {len(all_files)} 条记录", 'success', 3000)
         except Exception as e:
             QMessageBox.critical(self, "导出失败", str(e))
+
+
+
