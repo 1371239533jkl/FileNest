@@ -13,6 +13,9 @@ logs/
 # CodeBuddy 工作数据（仅本地使用）
 .codebuddy/
 
+# AI 会话历史（用户数据，不进版本库）
+sessions/
+
 # Python 缓存
 __pycache__/
 *.pyc
