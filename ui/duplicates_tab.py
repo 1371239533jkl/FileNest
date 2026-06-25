@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QMessageBox, QHeaderView,
     QSplitter
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QBrush
 
 from core import FileManager
@@ -28,6 +28,7 @@ class DuplicatesTab(QWidget):
         self.page_size = 50
         self.current_page = 0
         self._total_groups = 0
+        self._ai_worker = None
         self._init_ui()
 
     def _init_ui(self):
@@ -113,11 +114,41 @@ class DuplicatesTab(QWidget):
 
         bottom.addSpacing(20)
 
+        self.ai_select_btn = QPushButton("🤖 AI 智能选择")
+        self.ai_select_btn.setObjectName("aiSelectBtn")
+        self.ai_select_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.ai_select_btn.setToolTip("AI 分析当前重复组，建议保留哪个文件")
+        self.ai_select_btn.clicked.connect(self._on_ai_select)
+        self.ai_select_btn.setStyleSheet(
+            "QPushButton#aiSelectBtn {"
+            "  background: #89b4fa; color: #1e1e2e; border: none;"
+            "  border-radius: 6px; padding: 6px 14px; font-weight: bold; font-size: 10pt;"
+            "}"
+            "QPushButton#aiSelectBtn:hover { background: #b4d0fb; }"
+        )
+        bottom.addWidget(self.ai_select_btn)
+
         refresh_btn = QPushButton("刷新")
         refresh_btn.clicked.connect(self.refresh_data)
         bottom.addWidget(refresh_btn)
 
         layout.addLayout(bottom)
+
+    def _on_ai_select(self):
+        """点击 AI 智能选择按钮"""
+        rows = self.group_table.selectionModel().selectedRows()
+        if not rows:
+            notify(self, "请先在重复组列表中选中一组", 'info', 3000)
+            return
+        row = rows[0].row()
+        item = self.group_table.item(row, 0)
+        if not item:
+            return
+        file_hash = item.data(Qt.ItemDataRole.UserRole)
+        files = self.file_dao.get_duplicate_group_files(file_hash)
+        if not files:
+            return
+        self._ai_smart_select(file_hash, files)
 
     def refresh_data(self):
         try:
@@ -223,6 +254,73 @@ class DuplicatesTab(QWidget):
             btn_layout.addWidget(del_btn)
 
             self.detail_table.setCellWidget(i, 4, btn_widget)
+
+    def _ai_smart_select(self, file_hash: str, files: list):
+        """AI 智能裁决：分析重复文件组，建议保留哪个"""
+        from core.ai_layer import AILayer
+        ai = AILayer()
+        if not ai.enabled:
+            notify(self, "AI 未启用，请在设置中配置 AI 模型", 'info', 3000)
+            return
+
+        # 构建文件描述
+        lines = [f"重复文件组（共 {len(files)} 个）:"]
+        for i, f in enumerate(files, 1):
+            lines.append(
+                f"{i}. {f['file_name']} | 路径: {f.get('file_path','')} | "
+                f"大小: {format_size(f.get('file_size',0))} | "
+                f"修改时间: {f.get('modify_time','')}"
+            )
+
+        self.stats_label.setText("🤖 AI 正在分析重复文件...")
+
+        class _SmartWorker(QThread):
+            done = pyqtSignal(str)
+            error = pyqtSignal(str)
+
+            def __init__(self, ai_layer, desc, parent=None):
+                super().__init__(parent)
+                self.ai_layer = ai_layer
+                self.desc = desc
+
+            def run(self):
+                try:
+                    backend = getattr(self.ai_layer, '_backend', None)
+                    if not backend:
+                        self.error.emit("AI 后端未配置")
+                        return
+                    msgs = [
+                        {"role": "system",
+                         "content": "你是文件去重专家。分析重复文件组，建议保留哪个副本。考虑：文件名更规范、路径更合理、修改时间更新。输出一行建议。"},
+                        {"role": "user",
+                         "content": f"请建议保留哪个文件（输出序号和理由）:\n{self.desc}"}
+                    ]
+                    result = backend.chat(msgs, max_tokens=200, temperature=0.2)
+                    if result and hasattr(result, 'content'):
+                        self.done.emit(str(result.content))
+                    else:
+                        self.error.emit("AI 返回为空")
+                except Exception as e:
+                    self.error.emit(str(e))
+
+        desc_text = "\n".join(lines)
+        self._ai_worker = _SmartWorker(ai, desc_text, self)
+        self._ai_worker.done.connect(
+            lambda t: self._on_smart_done(t, files))
+        self._ai_worker.error.connect(self._on_smart_error)
+        self._ai_worker.start()
+
+    def _on_smart_done(self, text: str, files: list):
+        self._ai_worker = None
+        self.stats_label.setText(
+            f"🤖 AI 建议: {text[:200]}")
+        QMessageBox.information(
+            self, "🤖 AI 智能裁决", text)
+
+    def _on_smart_error(self, err: str):
+        self._ai_worker = None
+        self.stats_label.setText(f"AI 裁决失败: {err}")
+        logger.warning(f"AI 重复裁决失败: {err}")
 
     def _delete_single(self, file_id: int, file_name: str):
         reply = QMessageBox.question(

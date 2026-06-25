@@ -1,10 +1,10 @@
 """
-设置标签页 - 通用、扫描、重命名模板、去重策略
+设置标签页 - 通用、扫描、重命名模板、去重策略、AI 模型
 """
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QStackedWidget,
     QPushButton, QLabel, QLineEdit, QComboBox, QCheckBox,
-    QSpinBox, QFormLayout, QGroupBox
+    QSpinBox, QFormLayout, QGroupBox, QMessageBox
 )
 
 from config import DEDUP_STRATEGIES, MYSQL_CONFIG
@@ -12,6 +12,7 @@ from database.db_manager import db
 from database.models import SystemSettingsDAO
 from utils.logger import logger
 from ui.toast import notify
+from core.ai_model_config import AIModelConfigManager
 
 
 class SettingsTab(QWidget):
@@ -29,7 +30,7 @@ class SettingsTab(QWidget):
         # 左侧分类列表
         self.category_list = QListWidget()
         self.category_list.setFixedWidth(130)
-        self.category_list.addItems(["通用设置", "扫描设置", "重命名模板", "去重策略"])
+        self.category_list.addItems(["通用设置", "扫描设置", "重命名模板", "去重策略", "AI 模型"])
         self.category_list.currentRowChanged.connect(self._on_category_changed)
         layout.addWidget(self.category_list)
 
@@ -39,6 +40,7 @@ class SettingsTab(QWidget):
         self.stack.addWidget(self._create_scan_page())
         self.stack.addWidget(self._create_rename_page())
         self.stack.addWidget(self._create_dedup_page())
+        self.stack.addWidget(self._create_ai_page())
         layout.addWidget(self.stack, 1)
 
         self.category_list.setCurrentRow(0)
@@ -248,6 +250,109 @@ class SettingsTab(QWidget):
         layout.addStretch()
         return page
 
+    def _create_ai_page(self):
+        """AI 模型配置页面"""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        title = QLabel("AI 模型配置")
+        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #cba6f7;")
+        layout.addWidget(title)
+
+        # 当前状态
+        status_group = QGroupBox("当前 AI 状态")
+        status_layout = QFormLayout(status_group)
+
+        self.ai_status_label = QLabel("未配置")
+        self.ai_status_label.setStyleSheet("font-weight: bold; font-size: 11pt;")
+        status_layout.addRow("状态:", self.ai_status_label)
+
+        self.ai_provider_label = QLabel("-")
+        status_layout.addRow("提供商:", self.ai_provider_label)
+
+        self.ai_model_label = QLabel("-")
+        status_layout.addRow("模型:", self.ai_model_label)
+
+        layout.addWidget(status_group)
+
+        # 说明
+        info_group = QGroupBox("关于 AI 功能")
+        info_layout = QVBoxLayout(info_group)
+        info_text = QLabel(
+            "AI 功能可让本应用具备以下智能能力：\n\n"
+            "• 自然语言搜索 — 用日常语言描述要找的文件\n"
+            "• 搜索结果摘要 — AI 用自然语言总结搜索结果\n"
+            "• 追问 AI — 基于搜索结果继续对话\n"
+            "• 智能标签推荐 — AI 分析文件内容推荐标签\n"
+            "• 文件智能描述 — 右键任意文件让 AI 解读\n\n"
+            "支持所有兼容 OpenAI API 协议的服务商：\n"
+            "DeepSeek、通义千问、Moonshot、智谱GLM、OpenAI 等\n\n"
+            "您需要自行获取对应服务商的 API Key。\n"
+            "系统不会上传您的 API Key 到任何第三方。"
+        )
+        info_text.setWordWrap(True)
+        info_text.setStyleSheet("font-size: 10pt;")
+        info_layout.addWidget(info_text)
+        layout.addWidget(info_group)
+
+        # 操作按钮
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+
+        open_mgr_btn = QPushButton("🔧 管理 AI 模型")
+        open_mgr_btn.setObjectName("primaryBtn")
+        open_mgr_btn.setFixedHeight(36)
+        open_mgr_btn.clicked.connect(self._open_ai_settings_dialog)
+        btn_row.addWidget(open_mgr_btn)
+
+        layout.addLayout(btn_row)
+        layout.addStretch()
+        return page
+
+    def _open_ai_settings_dialog(self):
+        """打开 AI 模型管理对话框"""
+        from ui.ai_settings_dialog import AiSettingsDialog
+
+        # 获取当前主题
+        theme = "dark"
+        main_win = self.window()
+        if hasattr(main_win, '_current_theme'):
+            theme = main_win._current_theme
+
+        dlg = AiSettingsDialog(self, theme=theme)
+        dlg.config_changed.connect(self._on_ai_config_changed)
+        dlg.exec()
+
+    def _on_ai_config_changed(self):
+        """AI 配置变更后：通知主窗口重载 AI 后端"""
+        self._load_ai_settings()
+        main_win = self.window()
+        if hasattr(main_win, 'search_tab') and hasattr(main_win.search_tab, 'ai_layer'):
+            main_win.search_tab.ai_layer.reload_backend()
+            if hasattr(main_win.search_tab, 'ai_panel'):
+                main_win.search_tab.ai_panel.ai_layer.reload_backend()
+        notify(self, "AI 配置已更新", 'success', 3000)
+
+    def _load_ai_settings(self):
+        """加载 AI 模型配置到页面"""
+        try:
+            mgr = AIModelConfigManager()
+            active = mgr.get_active()
+            if active:
+                self.ai_status_label.setText("🟢 已启用")
+                self.ai_status_label.setStyleSheet(
+                    "color: #a6e3a1; font-weight: bold; font-size: 11pt;")
+                self.ai_provider_label.setText(f"{active.name} ({active.provider_id})")
+                self.ai_model_label.setText(active.model or "未指定模型")
+            else:
+                self.ai_status_label.setText("⚪ 未启用")
+                self.ai_status_label.setStyleSheet(
+                    "color: #f9e2af; font-weight: bold; font-size: 11pt;")
+                self.ai_provider_label.setText("-")
+                self.ai_model_label.setText("-")
+        except Exception as e:
+            logger.warning(f"加载 AI 设置失败: {e}")
+
     def refresh_data(self):
         self._load_settings()
 
@@ -285,6 +390,9 @@ class SettingsTab(QWidget):
                 self.max_hash_size.setValue(int(max_hash))
             except (ValueError, TypeError):
                 pass
+
+            # AI 设置
+            self._load_ai_settings()
         except Exception as e:
             logger.error(f"加载设置失败: {e}")
 

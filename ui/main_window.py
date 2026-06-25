@@ -16,12 +16,14 @@ from ui.toast import show_toast, ToastType
 from ui.scan_tab import ScanTab
 from ui.classify_tab import ClassifyTab
 from ui.search_tab import SearchTab
+from ui.ai_search_page import AiSearchPage
 from ui.history_tab import HistoryTab
 from ui.recycle_bin_tab import RecycleBinTab
 from ui.dashboard_tab import DashboardTab
 from ui.duplicates_tab import DuplicatesTab
 from ui.settings_tab import SettingsTab
 from ui.tags_tab import TagsTab
+from ui.command_palette import CommandPalette
 from ui.onboarding import OnboardingDialog
 from database.db_manager import db
 from database.models import SystemSettingsDAO
@@ -74,6 +76,7 @@ class MainWindow(QMainWindow):
             self.theme_manager.apply_theme_to_widget(self.scan_tab, theme_name)
             self.theme_manager.apply_theme_to_widget(self.classify_tab, theme_name)
             self.theme_manager.apply_theme_to_widget(self.search_tab, theme_name)
+            self.theme_manager.apply_theme_to_widget(self.ai_search_tab, theme_name)
             self.theme_manager.apply_theme_to_widget(self.history_tab, theme_name)
             self.theme_manager.apply_theme_to_widget(self.recycle_bin_tab, theme_name)
             self.theme_manager.apply_theme_to_widget(self.duplicates_tab, theme_name)
@@ -137,6 +140,7 @@ class MainWindow(QMainWindow):
             ("  📂  扫描管理"),
             ("  📁  分类管理"),
             ("  🔍  文件搜索"),
+            ("  🤖  AI 搜索"),
             ("  📋  操作历史"),
             ("  ♻️  回收区"),
             ("  🔁  重复文件"),
@@ -157,6 +161,7 @@ class MainWindow(QMainWindow):
         self.scan_tab = ScanTab(self)
         self.classify_tab = ClassifyTab(self)
         self.search_tab = SearchTab(self)
+        self.ai_search_tab = AiSearchPage(self)
         self.history_tab = HistoryTab(self)
         self.recycle_bin_tab = RecycleBinTab(self)
         self.duplicates_tab = DuplicatesTab(self)
@@ -167,6 +172,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.scan_tab)
         self.stack.addWidget(self.classify_tab)
         self.stack.addWidget(self.search_tab)
+        self.stack.addWidget(self.ai_search_tab)
         self.stack.addWidget(self.history_tab)
         self.stack.addWidget(self.recycle_bin_tab)
         self.stack.addWidget(self.duplicates_tab)
@@ -208,6 +214,16 @@ class MainWindow(QMainWindow):
         self._rename_shortcut = QShortcut(QKeySequence("F2"), self)
         self._rename_shortcut.activated.connect(self._on_rename_shortcut)
 
+        self._ai_search_shortcut = QShortcut(QKeySequence("Ctrl+Shift+F"), self)
+        self._ai_search_shortcut.activated.connect(self._open_ai_search)
+
+        self._cmd_palette_shortcut = QShortcut(QKeySequence("Ctrl+Shift+P"), self)
+        self._cmd_palette_shortcut.activated.connect(self._open_command_palette)
+
+        # ── 页面间信号连接 ──
+        self.search_tab.ai_search_clicked.connect(self._switch_to_ai_search)
+        self.ai_search_tab.go_back.connect(self._on_ai_search_back)
+
     # ── 反馈方法（供子页面调用） ──
 
     def show_toast(self, message: str,
@@ -237,7 +253,7 @@ class MainWindow(QMainWindow):
                        hasattr(current, 'refresh_data')
             if has_undo:
                 idx = self.stack.currentIndex()
-                names = ["仪表盘", "扫描管理", "分类管理", "文件搜索", "操作历史", "回收区", "重复文件", "标签管理", "系统设置"]
+                names = ["仪表盘", "扫描管理", "分类管理", "文件搜索", "AI搜索", "操作历史", "回收区", "重复文件", "标签管理", "系统设置"]
                 self.show_toast(f"当前页面({names[idx]})不支持撤销", ToastType.INFO, 2000)
 
     def _on_search_shortcut(self):
@@ -264,6 +280,28 @@ class MainWindow(QMainWindow):
         current = self.stack.currentWidget()
         if hasattr(current, 'rename_selected'):
             current.rename_selected()
+
+    def _open_ai_search(self):
+        """Ctrl+Shift+F → 切换到 AI 搜索页"""
+        self.switch_to_tab(4)  # AI 搜索页 index=4
+        if hasattr(self.ai_search_tab, 'focus_search'):
+            self.ai_search_tab.focus_search()
+
+    def _switch_to_ai_search(self):
+        """从搜索页的 AI 按钮跳转到 AI 搜索页"""
+        self.switch_to_tab(4)  # AI 搜索页 index=4
+        if hasattr(self.ai_search_tab, 'focus_search'):
+            self.ai_search_tab.focus_search()
+
+    def _on_ai_search_back(self):
+        """从 AI 搜索页返回文件搜索页"""
+        self.switch_to_tab(3)  # 文件搜索页 index=3
+
+    def _open_command_palette(self):
+        """Ctrl+Shift+P → 打开命令面板"""
+        palette = CommandPalette(self, theme=self._current_theme)
+        palette.focus_input()
+        palette.exec()
 
     def _on_nav_changed(self, index):
         if index < 0:

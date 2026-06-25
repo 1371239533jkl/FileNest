@@ -3,9 +3,9 @@
 """
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea
+    QScrollArea, QFrame
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 from database.db_manager import db
 from database.models import FileDAO
@@ -16,12 +16,31 @@ from ui.chart_widgets import StatCard, PieChartWidget, BarChartWidget, TrendChar
 from ui.empty_state import create_empty_state
 
 
+class _InsightWorker(QThread):
+    """后台 AI 洞察分析线程"""
+    done = pyqtSignal(str)
+    error = pyqtSignal(str)
+
+    def __init__(self, ai_layer, stats, parent=None):
+        super().__init__(parent)
+        self.ai_layer = ai_layer
+        self.stats = stats
+
+    def run(self):
+        try:
+            result = self.ai_layer.generate_dashboard_insights(**self.stats)
+            self.done.emit(result or "")
+        except Exception as e:
+            self.error.emit(str(e))
+
+
 class DashboardTab(QWidget):
     """磁盘空间分析仪表盘"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.file_dao = FileDAO(db)
+        self._insight_worker = None
         self._init_ui()
 
     def _init_ui(self):
@@ -66,6 +85,27 @@ class DashboardTab(QWidget):
         cards_layout.addWidget(self.card_dup_groups)
         cards_layout.addWidget(self.card_wasted)
         self._grid.addLayout(cards_layout)
+
+        # ── AI 洞察卡片 ──
+        self.insight_card = QFrame()
+        self.insight_card.setObjectName("dashboardInsightCard")
+        self.insight_card.setVisible(False)
+        insight_layout = QVBoxLayout(self.insight_card)
+        insight_layout.setContentsMargins(14, 10, 14, 10)
+        insight_layout.setSpacing(4)
+
+        insight_header = QHBoxLayout()
+        insight_title = QLabel("🤖 AI 洞察")
+        insight_title.setStyleSheet("font-weight: bold; font-size: 11pt;")
+        insight_header.addWidget(insight_title)
+        insight_header.addStretch()
+        insight_layout.addLayout(insight_header)
+
+        self.insight_label = QLabel("")
+        self.insight_label.setWordWrap(True)
+        self.insight_label.setStyleSheet("font-size: 10pt; line-height: 1.5;")
+        insight_layout.addWidget(self.insight_label)
+        self._grid.addWidget(self.insight_card)
 
         # ── 图表行 1：类型分布饼图 + 大小分布柱状图 ──
         charts1 = QHBoxLayout()
@@ -193,3 +233,63 @@ class DashboardTab(QWidget):
                 'value': row.get('count', 0),
             })
         self.trend_monthly.set_data(trend_data, "月度扫描趋势")
+
+        # ── 触发 AI 洞察分析 ──
+        self._trigger_ai_insight(total_files, total_size, dup_groups, wasted,
+                                  type_stats, top_dirs, monthly)
+
+    def _trigger_ai_insight(self, total_files, total_size, dup_groups, wasted,
+                             type_stats, top_dirs, monthly):
+        """后台触发 AI 仪表盘洞察"""
+        from core.ai_layer import AILayer
+        ai = AILayer()
+        if not ai.enabled:
+            self.insight_card.setVisible(False)
+            return
+
+        # 构建统计数据文本
+        type_dist = ", ".join(
+            f"{FILE_TYPE_NAMES.get(r['file_type'], r['file_type'])} {r['count']}个"
+            for r in type_stats[:5]
+        )
+        def _short_dir(r):
+            p = r.get('dir_path', '').replace('\\', '/').rstrip('/')
+            return p.split('/')[-1][:20] if p else ''
+
+        top_dirs_text = "; ".join(
+            f"{_short_dir(r)}({format_size(r.get('total_size', 0))})"
+            for r in top_dirs[:3]
+        )
+        monthly_text = ", ".join(
+            f"{r.get('month', '')}:{r.get('count', 0)}个"
+            for r in monthly[-6:]
+        )
+
+        stats = {
+            "total_files": total_files,
+            "total_size": format_size(total_size),
+            "dup_groups": dup_groups,
+            "wasted": format_size(wasted),
+            "type_distribution": type_dist,
+            "top_dirs": top_dirs_text,
+            "monthly_trend": monthly_text,
+        }
+
+        self.insight_label.setText("🤖 AI 正在分析磁盘状况...")
+        self.insight_card.setVisible(True)
+
+        self._insight_worker = _InsightWorker(ai, stats, self)
+        self._insight_worker.done.connect(self._on_insight_done)
+        self._insight_worker.error.connect(self._on_insight_error)
+        self._insight_worker.start()
+
+    def _on_insight_done(self, text: str):
+        if text:
+            self.insight_label.setText(text)
+            self.insight_card.setVisible(True)
+        else:
+            self.insight_card.setVisible(False)
+
+    def _on_insight_error(self, err: str):
+        self.insight_card.setVisible(False)
+        logger.warning(f"仪表盘 AI 洞察失败: {err}")

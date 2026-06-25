@@ -19,6 +19,7 @@ from core import FileClassifier, FileManager, TagManager
 from core.batch_classifier import BatchClassifyWorker
 from core.data_cache import GlobalDataCache
 from core.rule_engine import TagRecommender
+from core.ai_layer import AILayer
 from database.db_manager import db
 from database.models import FileDAO, ClassificationDAO, MetadataDAO, TagDAO
 from utils.display_utils import format_size, truncate_path, get_file_icon, get_file_color
@@ -278,6 +279,7 @@ class ClassifyTab(QWidget):
         self.cls_dao = ClassificationDAO(db)
         self.meta_dao = MetadataDAO(db)
         self.tag_manager = TagManager()
+        self.ai_layer = AILayer()  # AI 增强标签推荐
         self.classifier = FileClassifier()
         self.file_manager = FileManager()
         self.page_size = 500
@@ -795,6 +797,13 @@ class ClassifyTab(QWidget):
             lambda: self._recommend_tags_for_file(file_id))
         menu.addAction(recommend_tag_action)
 
+        # AI 描述文件
+        if self.ai_layer.enabled:
+            ai_desc_action = QAction("🤖 AI 描述此文件", self)
+            ai_desc_action.triggered.connect(
+                lambda: self._ai_describe_file(file_id))
+            menu.addAction(ai_desc_action)
+
         menu.addSeparator()
 
         delete_action = QAction("标记删除", self)
@@ -937,8 +946,8 @@ class ClassifyTab(QWidget):
             notify(self, "文件记录不存在", 'warning', 3000)
             return
 
-        # 获取推荐标签
-        recommendations = TagRecommender.recommend(record, max_tags=8)
+        # 获取推荐标签（优先 AI，降级规则引擎）
+        recommendations, source = self.ai_layer.recommend_tags(record)
         if not recommendations:
             QMessageBox.information(self, "标签推荐",
                                     f"未找到适合「{record['file_name']}」的推荐标签。")
@@ -962,7 +971,8 @@ class ClassifyTab(QWidget):
         sep_color = '#ccd0da' if is_light else '#45475a'
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("智能推荐标签")
+        source_label = "AI" if source == "ai" else "本地规则"
+        dlg.setWindowTitle(f"智能推荐标签 ({source_label})")
         dlg.setMinimumWidth(420)
         dlg.setModal(True)
         dlg.setStyleSheet(f"QDialog {{ background-color: {dialog_bg}; }}")
@@ -1037,6 +1047,44 @@ class ClassifyTab(QWidget):
         except Exception as e:
             logger.error(f"添加标签失败: {e}")
             QMessageBox.critical(self, "标签推荐", f"添加标签失败: {e}")
+
+    def _ai_describe_file(self, file_id):
+        """AI 描述单个文件"""
+        record = self._file_model.get_record_by_id(file_id)
+        if record is None:
+            record = self.file_dao.get_by_id(file_id)
+        if not record:
+            return
+
+        class _DescWorker(QThread):
+            done = pyqtSignal(str)
+            error = pyqtSignal(str)
+
+            def __init__(self, ai_layer, record, parent=None):
+                super().__init__(parent)
+                self.ai_layer = ai_layer
+                self.record = record
+
+            def run(self):
+                try:
+                    result = self.ai_layer.describe_file(self.record) or "无法生成描述"
+                    self.done.emit(result)
+                except Exception as e:
+                    self.error.emit(str(e))
+
+        self._desc_worker = _DescWorker(self.ai_layer, record, self)
+        self._desc_worker.done.connect(self._on_ai_desc_done)
+        self._desc_worker.error.connect(self._on_ai_desc_error)
+        self._desc_worker.start()
+
+    def _on_ai_desc_done(self, text: str):
+        self._desc_worker = None
+        QMessageBox.information(self, "🤖 AI 文件描述", text)
+
+    def _on_ai_desc_error(self, err: str):
+        self._desc_worker = None
+        QMessageBox.warning(self, "AI 描述失败", err)
+        logger.warning(f"AI 描述文件失败: {err}")
 
     def _context_delete(self, file_id):
         """右键菜单：标记删除单个文件"""
