@@ -99,7 +99,7 @@ DEFAULT_KEYWORD_RULES = {
 # ── AI 配置（DeepSeek API） ──
 AI_CONFIG = {
     'enabled': True,
-    'api_key': os.getenv('SMART_FM_AI_KEY', 'sk-057f9b007f0f4d62be8be34ac9b92e80'),
+    'api_key': os.getenv('SMART_FM_AI_KEY', ''),
     'model': 'deepseek-chat',
     'base_url': 'https://api.deepseek.com/v1',
     'timeout': 60,  # 秒
