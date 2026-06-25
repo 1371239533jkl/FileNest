@@ -57,7 +57,7 @@ BUILTIN_PROVIDERS = {
         "base_url": "https://api.siliconflow.cn/v1",
         "models": "deepseek-ai/DeepSeek-V3,Pro/deepseek-ai/DeepSeek-R1,Qwen/Qwen2.5-7B-Instruct",
         "default_model": "deepseek-ai/DeepSeek-V3",
-        "timeout": 20,
+        "timeout": 60,
     },
 }
 
@@ -71,7 +71,7 @@ class AIModelProvider:
     api_key: str = ""                         # API 密钥
     model: str = ""                           # 当前使用的模型
     models: str = ""                          # 可用模型列表（逗号分隔）
-    timeout: float = 20.0                     # 超时秒数
+    timeout: float = 60.0                     # 超时秒数
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -85,7 +85,7 @@ class AIModelProvider:
             api_key=d.get("api_key", ""),
             model=d.get("model", ""),
             models=d.get("models", ""),
-            timeout=d.get("timeout", 20),
+            timeout=d.get("timeout", 60),
         )
 
 

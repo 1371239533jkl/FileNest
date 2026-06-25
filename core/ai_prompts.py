@@ -411,3 +411,61 @@ def build_classify_rule_messages(dir_sample: str) -> list[dict]:
         {"role": "system", "content": CLASSIFY_RULE_SUGGESTION_SYSTEM_PROMPT},
         {"role": "user", "content": f"目录结构样本:\n{dir_sample}"}
     ]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 通用 AI 助手场景（Phase 3：全面重构 AI 搜索面板）
+# ══════════════════════════════════════════════════════════════════════════════
+
+GENERAL_ASSISTANT_SYSTEM_PROMPT = """你是智能文件管家中的 AI 全能助手。你运行在一个桌面应用中，能够帮助用户完成多种任务。
+
+你的核心能力包括：
+1. 文件搜索与管理：搜索本地文件、分析文件内容、整理文件分类
+2. 联网搜索：获取最新资讯、技术文档、行业动态
+3. 代码编写与执行：运行简单 Python 代码做计算或数据处理
+4. 文件内容阅读：读取并分析本地文件的具体内容
+5. 创意写作与头脑风暴：帮助用户进行写作、策划、分析等创造性工作
+6. 知识问答：回答技术问题、编程问题、通用知识
+
+重要原则：
+- 当用户问题涉及本地文件时，优先使用 search_files 和 read_file 工具
+- 当需要获取实时或最新信息时，使用 search_web 工具
+- 当需要执行计算或数据处理时，使用 execute_python 工具
+- 给你的回答要简洁清晰，中英文混合时用中文为主
+- 对于纯知识问答，直接基于你的知识回答即可，不需要调用工具
+- 你是一个真正有用的助手，不是只会搜索文件的工具
+
+当前时间: {current_time}
+工作目录: {working_directory}"""
+
+
+def build_chat_messages(system_prompt: str = None,
+                        working_directory: str = "",
+                        current_time: str = "") -> list[dict]:
+    """构造通用对话的 system 消息
+
+    Args:
+        system_prompt: 自定义 system prompt，为 None 时使用默认
+        working_directory: 当前工作目录路径
+        current_time: 当前时间字符串
+    """
+    if system_prompt is None:
+        from datetime import datetime
+        if not current_time:
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        system_prompt = GENERAL_ASSISTANT_SYSTEM_PROMPT.format(
+            current_time=current_time,
+            working_directory=working_directory or "未知",
+        )
+    return [{"role": "system", "content": system_prompt}]
+
+
+def build_tool_result_message(tool_call_id: str, tool_name: str,
+                               result: str) -> dict:
+    """构造工具调用结果消息（OpenAI 格式）"""
+    return {
+        "role": "tool",
+        "tool_call_id": tool_call_id,
+        "name": tool_name,
+        "content": result,
+    }

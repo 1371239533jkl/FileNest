@@ -224,6 +224,12 @@ class SearchTab(QWidget):
         """服务端分页：每次只查询当前页数据"""
         if not self._search_params:
             return
+
+        # AI 模式：从内存分页
+        if self._search_params.get("_ai_mode"):
+            self._ai_load_page()
+            return
+
         try:
             # 查总数（只在第一页时查询，缓存结果）
             if self.current_page == 0 or self.total_count == 0:
@@ -318,6 +324,40 @@ class SearchTab(QWidget):
         self.prev_page_btn.setEnabled(False)
         self.next_page_btn.setEnabled(False)
         self.export_btn.setVisible(False)
+
+    def display_ai_results(self, result: dict):
+        """接收 AI 搜索结果，填充到表格并阻止后续覆写
+
+        Args:
+            result: {"files": [...], "total": N, "params": {...}}
+        """
+        files = result.get("files", [])
+        total = result.get("total", len(files))
+
+        if not files:
+            self.result_label.setText("AI 搜索没有找到匹配的文件")
+            return
+
+        # 存入内存，用于本地翻页
+        self._ai_files = files
+        self.total_count = total
+        self.current_page = 0
+        self._search_params = {"_ai_mode": True}  # 标记为 AI 模式
+
+        # 填充当前页
+        self._ai_load_page()
+
+        # 显示提示
+        query = getattr(self, '_ai_query_hint', 'AI 搜索')
+        self.result_label.setText(f"🤖 {query} → 共 {total} 个文件")
+
+    def _ai_load_page(self):
+        """AI 模式下的本地分页"""
+        files = getattr(self, '_ai_files', [])
+        start = self.current_page * self.page_size
+        end = start + self.page_size
+        page_files = files[start:end]
+        self._populate_results(page_files)
 
     def _show_context_menu(self, pos):
         """搜索列表右键菜单"""
