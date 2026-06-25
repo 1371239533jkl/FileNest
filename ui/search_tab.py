@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QSpinBox, QDateEdit, QGroupBox, QHeaderView, QMessageBox,
     QCheckBox, QMenu, QApplication, QInputDialog, QFileDialog
 )
-from PyQt6.QtCore import Qt, QDate
+from PyQt6.QtCore import Qt, QDate, QThread, pyqtSignal
 from PyQt6.QtGui import QAction, QColor, QBrush
 
 import os
@@ -24,6 +24,9 @@ from ui.empty_state import create_empty_state
 
 
 class SearchTab(QWidget):
+    # 信号：用户点击“AI 搜索”按钮
+    ai_search_clicked = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.file_dao = FileDAO(db)
@@ -40,20 +43,23 @@ class SearchTab(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(8)
 
-        # ── 自然语言搜索行 ──
-        nl_row = QHBoxLayout()
-        nl_label = QLabel("智能搜索:")
-        nl_label.setToolTip("支持自然语言，如「大于100MB的图片」「上周的PDF文档」「重复文件」")
-        nl_row.addWidget(nl_label)
-        self.nl_input = QLineEdit()
-        self.nl_input.setPlaceholderText("试试说: 大于100MB的图片 | 上周的文档 | 桌面上的重复文件...")
-        self.nl_input.returnPressed.connect(self._do_nl_search)
-        nl_row.addWidget(self.nl_input)
-        self.nl_search_btn = QPushButton("智能搜索")
-        self.nl_search_btn.setObjectName("primaryBtn")
-        self.nl_search_btn.clicked.connect(self._do_nl_search)
-        nl_row.addWidget(self.nl_search_btn)
-        layout.addLayout(nl_row)
+        # ── AI 搜索触发按钮 ──
+        ai_row = QHBoxLayout()
+        ai_row.addStretch()
+        self.ai_search_btn = QPushButton("🤖 AI 搜索")
+        self.ai_search_btn.setObjectName("aiSearchBtn")
+        self.ai_search_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.ai_search_btn.setToolTip("打开全屏 AI 对话搜索，支持自然语言描述文件需求")
+        self.ai_search_btn.clicked.connect(self.ai_search_clicked.emit)
+        self.ai_search_btn.setStyleSheet(
+            "QPushButton#aiSearchBtn {"
+            "  background: #89b4fa; color: #1e1e2e; border: none;"
+            "  border-radius: 8px; padding: 8px 20px; font-weight: bold; font-size: 11pt;"
+            "}"
+            "QPushButton#aiSearchBtn:hover { background: #b4d0fb; }"
+        )
+        ai_row.addWidget(self.ai_search_btn)
+        layout.addLayout(ai_row)
 
         # 搜索条件区
         search_group = QGroupBox("高级搜索条件")
@@ -200,101 +206,6 @@ class SearchTab(QWidget):
         self.start_date.setEnabled(checked)
         self.end_date.setEnabled(checked)
 
-    def _do_nl_search(self):
-        """智能搜索：解析自然语言查询并自动填充条件 + 执行搜索"""
-        query = self.nl_input.text().strip()
-        if not query:
-            notify(self, "请输入自然语言查询，如「大于100MB的图片」", 'info', 3000)
-            return
-
-        try:
-            params = self.nl_parser.parse(query)
-            if not params:
-                notify(self, "未能理解您的查询，请尝试更明确的描述", 'warning', 3000)
-                return
-
-            # 用解析结果填充高级搜索字段
-            self._apply_nl_params(params)
-
-            # 显示解析说明
-            explanation = self.nl_parser.explain(query)
-            notify(self, f"智能解析: {explanation}", 'success', 4000)
-
-            self.current_page = 0
-            self._load_page()
-        except Exception as e:
-            logger.error(f"NL搜索解析失败: {e}")
-            QMessageBox.warning(self, "智能搜索", f"解析失败: {e}")
-
-    def _apply_nl_params(self, params: dict):
-        """将 NL 解析结果填充到高级搜索 UI 控件"""
-        self._search_params = {}
-
-        if 'name' in params:
-            self.name_input.setText(params['name'])
-            self._search_params['name'] = params['name']
-        else:
-            self.name_input.clear()
-            self._search_params['name'] = None
-
-        if 'file_type' in params:
-            ft = params['file_type']
-            idx = self.type_combo.findData(ft)
-            if idx >= 0:
-                self.type_combo.setCurrentIndex(idx)
-            self._search_params['file_type'] = ft
-        else:
-            self.type_combo.setCurrentIndex(0)
-            self._search_params['file_type'] = None
-
-        if 'extension' in params:
-            self._search_params['extension'] = params['extension']
-        else:
-            self._search_params['extension'] = None
-
-        if 'min_size' in params:
-            kb_val = max(0, params['min_size'] // 1024)
-            self.min_size.setValue(min(kb_val, 999999999))
-            self._search_params['min_size'] = params['min_size']
-        else:
-            self.min_size.setValue(0)
-            self._search_params['min_size'] = None
-
-        if 'max_size' in params:
-            mb_val = max(0, (params['max_size'] + 1024 * 1024 - 1) // (1024 * 1024))
-            self.max_size.setValue(min(mb_val, 999999))
-            self._search_params['max_size'] = params['max_size']
-        else:
-            self.max_size.setValue(0)
-            self._search_params['max_size'] = None
-
-        if 'start_date' in params:
-            try:
-                d = QDate.fromString(params['start_date'][:10], 'yyyy-MM-dd')
-                self.start_date.setDate(d)
-                self.use_date_cb.setChecked(True)
-                self._search_params['start_date'] = params['start_date']
-            except Exception:
-                self.use_date_cb.setChecked(False)
-                self._search_params['start_date'] = None
-        else:
-            self.use_date_cb.setChecked(False)
-            self._search_params['start_date'] = None
-
-        if 'end_date' in params:
-            self._search_params['end_date'] = params['end_date']
-        else:
-            self._search_params['end_date'] = None
-
-        if 'is_duplicate' in params:
-            idx = self.dup_combo.findData(params['is_duplicate'])
-            if idx >= 0:
-                self.dup_combo.setCurrentIndex(idx)
-            self._search_params['is_duplicate'] = params['is_duplicate']
-        else:
-            self.dup_combo.setCurrentIndex(0)
-            self._search_params['is_duplicate'] = None
-
     def _do_search(self):
         self._search_params = {
             'name': self.name_input.text().strip() or None,
@@ -305,6 +216,7 @@ class SearchTab(QWidget):
             'end_date': self.end_date.date().toString("yyyy-MM-dd 23:59:59") if self.use_date_cb.isChecked() else None,
             'is_duplicate': self.dup_combo.currentData(),
         }
+        self.result_label.setStyleSheet("")
         self.current_page = 0
         self._load_page()
 
@@ -368,7 +280,7 @@ class SearchTab(QWidget):
             is_dup = "是" if f.get('is_duplicate') else "否"
             self.result_table.setItem(i, 6, QTableWidgetItem(is_dup))
 
-        self.result_label.setText(f"找到 {total} 个文件")
+        self.result_label.setText(f"共 {total} 个文件")
         self.total_size_label.setText(f"当前页: {format_size(total_size)}")
 
         # 更新分页状态
@@ -389,7 +301,6 @@ class SearchTab(QWidget):
             self._load_page()
 
     def _reset_search(self):
-        self.nl_input.clear()
         self.name_input.clear()
         self.type_combo.setCurrentIndex(0)
         self.min_size.setValue(0)
@@ -401,6 +312,7 @@ class SearchTab(QWidget):
         self._search_params = {}
         self.result_table.setRowCount(0)
         self.result_label.setText("请输入搜索条件")
+        self.result_label.setStyleSheet("")
         self.total_size_label.setText("")
         self.page_label.setText("第 0 页 / 共 0 页")
         self.prev_page_btn.setEnabled(False)
@@ -453,6 +365,22 @@ class SearchTab(QWidget):
         copy_name_action.triggered.connect(
             lambda: QApplication.clipboard().setText(record['file_name']))
         menu.addAction(copy_name_action)
+
+        menu.addSeparator()
+
+        # ── AI 功能 ──
+        from core.ai_layer import AILayer
+        ai_check = AILayer()
+        if ai_check.enabled:
+            ai_desc_action = QAction("🤖 AI 描述此文件", self)
+            ai_desc_action.triggered.connect(
+                lambda: self._ai_describe_file(file_id))
+            menu.addAction(ai_desc_action)
+
+            ai_rename_action = QAction("🤖 AI 建议重命名", self)
+            ai_rename_action.triggered.connect(
+                lambda: self._ai_suggest_rename(file_id))
+            menu.addAction(ai_rename_action)
 
         menu.addSeparator()
 
@@ -668,6 +596,166 @@ class SearchTab(QWidget):
             fid = item.data(Qt.ItemDataRole.UserRole)
             if fid is not None:
                 self._context_rename(fid)
+
+    def _ai_describe_file(self, file_id):
+        """AI 描述单个文件 —— 后台线程调用（优先内容级分析）"""
+        from core.ai_layer import AILayer
+        from core.file_reader import read_file_content
+        record = self.file_dao.get_by_id(file_id)
+        if not record:
+            return
+
+        self.result_label.setText("🤖 AI 正在分析文件...")
+        self.result_label.setStyleSheet("color: #89b4fa; font-weight: bold; font-size: 13px;")
+
+        class _DescWorker(QThread):
+            done = pyqtSignal(str)
+            error = pyqtSignal(str)
+
+            def __init__(self, ai_layer, record, parent=None):
+                super().__init__(parent)
+                self.ai_layer = ai_layer
+                self.record = record
+
+            def run(self):
+                try:
+                    # 尝试读取文件内容做深度分析
+                    file_path = self.record.get('file_path', '')
+                    content = read_file_content(file_path) if file_path else None
+
+                    if content:
+                        # 内容级分析
+                        from config import FILE_TYPE_NAMES as FTN
+                        from utils.display_utils import format_size
+                        result = self.ai_layer.summarize_file_content(
+                            file_name=self.record.get('file_name', ''),
+                            file_path=file_path,
+                            file_type=FTN.get(self.record.get('file_type', ''), '未知'),
+                            file_size=format_size(self.record.get('file_size', 0)),
+                            modify_time=str(self.record.get('modify_time', '')),
+                            file_content=content,
+                        )
+                    else:
+                        # 降级：仅元数据分析
+                        result = self.ai_layer.describe_file(self.record)
+
+                    self.done.emit(result or "无法生成描述")
+                except Exception as e:
+                    self.error.emit(str(e))
+
+        ai = AILayer()
+        self._desc_worker = _DescWorker(ai, record, self)
+        self._desc_worker.done.connect(self._on_ai_desc_done)
+        self._desc_worker.error.connect(self._on_ai_desc_error)
+        self._desc_worker.start()
+
+    def _on_ai_desc_done(self, text: str):
+        self._desc_worker = None
+        self.result_label.setText(f"🤖 AI 描述: {text}")
+        self.result_label.setStyleSheet("color: #a6e3a1; font-weight: bold; font-size: 12px;")
+        QMessageBox.information(self, "🤖 AI 文件描述", text)
+
+    def _on_ai_desc_error(self, err: str):
+        self._desc_worker = None
+        self.result_label.setText(f"AI 描述失败: {err}")
+        self.result_label.setStyleSheet("color: #f38ba8; font-size: 12px;")
+        logger.warning(f"AI 描述文件失败: {err}")
+
+    def _ai_suggest_rename(self, file_id):
+        """AI 智能重命名建议 —— 后台线程调用"""
+        from core.ai_layer import AILayer
+        record = self.file_dao.get_by_id(file_id)
+        if not record:
+            return
+
+        self.result_label.setText("🤖 AI 正在生成重命名建议...")
+        self.result_label.setStyleSheet("color: #89b4fa; font-weight: bold; font-size: 13px;")
+
+        class _RenameWorker(QThread):
+            done = pyqtSignal(list)
+            error = pyqtSignal(str)
+
+            def __init__(self, ai_layer, record, parent=None):
+                super().__init__(parent)
+                self.ai_layer = ai_layer
+                self.record = record
+
+            def run(self):
+                try:
+                    from utils.display_utils import format_size
+                    suggestions = self.ai_layer.suggest_rename(
+                        file_name=self.record.get('file_name', ''),
+                        file_path=self.record.get('file_path', ''),
+                        file_type=self.record.get('file_type', 'unknown'),
+                        file_size=format_size(self.record.get('file_size', 0)),
+                        modify_time=str(self.record.get('modify_time', '')),
+                    )
+                    self.done.emit(suggestions or [])
+                except Exception as e:
+                    self.error.emit(str(e))
+
+        ai = AILayer()
+        self._rename_worker = _RenameWorker(ai, record, self)
+        self._rename_worker.done.connect(self._on_ai_rename_done)
+        self._rename_worker.error.connect(self._on_ai_rename_error)
+        self._rename_worker.start()
+
+    def _on_ai_rename_done(self, suggestions: list):
+        self._rename_worker = None
+        self.result_label.setText("")
+        self.result_label.setStyleSheet("")
+
+        if not suggestions:
+            QMessageBox.information(self, "🤖 AI 重命名", "无法生成重命名建议。")
+            return
+
+        # 获取 file_id（从 _rename_worker 的 record 中）
+        file_id = getattr(self._rename_worker, 'record', {}).get('file_id') if hasattr(self, '_rename_worker') else None
+
+        # 让用户从建议中选择
+        items = []
+        for i, s in enumerate(suggestions[:3], 1):
+            items.append(f"{i}. {s}")
+        chosen, ok = QInputDialog.getItem(
+            self, "🤖 AI 重命名建议",
+            "选择一个建议（取消则手动输入）：",
+            items, 0, False
+        )
+        if ok and chosen:
+            name = chosen.split(". ", 1)[-1]
+            new_name, ok2 = QInputDialog.getText(
+                self, "确认重命名", "新文件名：", text=name
+            )
+            if ok2 and new_name.strip() and file_id:
+                self._do_rename_file(file_id=file_id, new_name=new_name.strip())
+
+    def _on_ai_rename_error(self, err: str):
+        self._rename_worker = None
+        self.result_label.setText(f"AI 重命名失败: {err}")
+        self.result_label.setStyleSheet("color: #f38ba8; font-size: 12px;")
+        logger.warning(f"AI 重命名建议失败: {err}")
+
+    def _do_rename_file(self, file_id, new_name):
+        """执行重命名"""
+        try:
+            record = self.file_dao.get_by_id(file_id)
+            if not record:
+                return
+            old_path = record.get('file_path', '')
+            if not old_path or not os.path.exists(old_path):
+                QMessageBox.warning(self, "重命名失败", "文件不存在")
+                return
+            dir_path = os.path.dirname(old_path)
+            new_path = os.path.join(dir_path, new_name)
+            if os.path.exists(new_path):
+                QMessageBox.warning(self, "重命名失败", f"目标文件已存在: {new_name}")
+                return
+            os.rename(old_path, new_path)
+            self.file_dao.update_name(file_id, new_name, new_path)
+            notify(self, f"已重命名为: {new_name}", 'success', 3000)
+            self.refresh_data()
+        except Exception as e:
+            QMessageBox.critical(self, "重命名失败", str(e))
 
     def _export_csv(self):
         """导出当前搜索结果（全量）为 CSV 文件"""

@@ -1,0 +1,14 @@
+{
+  "active_provider": "siliconflow",
+  "providers": {
+    "siliconflow": {
+      "provider_id": "siliconflow",
+      "name": "硅基流动 (免费)",
+      "base_url": "https://api.siliconflow.cn/v1",
+      "api_key": "sk-iptavzohagnikhsytfcskwvltkllqevloacsrnqslgmxhzzp",
+      "model": "deepseek-ai/DeepSeek-V3",
+      "models": "deepseek-ai/DeepSeek-V3,Pro/deepseek-ai/DeepSeek-R1,Qwen/Qwen2.5-7B-Instruct",
+      "timeout": 20.0
+    }
+  }
+}

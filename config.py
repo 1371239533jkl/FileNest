@@ -95,3 +95,12 @@ DEFAULT_KEYWORD_RULES = {
     '生活': ['照片', '旅游', '美食', 'photo', 'travel', 'food'],
     '项目': ['代码', '设计', '需求', '测试', 'code', 'design', 'test'],
 }
+
+# ── AI 配置（DeepSeek API） ──
+AI_CONFIG = {
+    'enabled': True,
+    'api_key': os.getenv('SMART_FM_AI_KEY', 'sk-057f9b007f0f4d62be8be34ac9b92e80'),
+    'model': 'deepseek-chat',
+    'base_url': 'https://api.deepseek.com/v1',
+    'timeout': 20,  # 秒
+}

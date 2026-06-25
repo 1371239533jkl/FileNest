@@ -57,6 +57,8 @@ class NLSearchParser:
     """
 
     # ── 时间表达式模式 (正则) ──
+    # (?P<n>\d+|[一二两三四五六七八九十几]+) 同时匹配阿拉伯数字和中文数字
+    # (?:内|来)? 可选后缀，支持“三天内”“一周来”等
     _TIME_PATTERNS: List[Tuple[str, str]] = [
         # 相对时间
         (r'今天|today', 'today'),
@@ -67,10 +69,18 @@ class NLSearchParser:
         (r'上月|上个月|last\s*month', 'last_month'),
         (r'今年|this\s*year', 'this_year'),
         (r'去年|last\s*year', 'last_year'),
-        # 最近 N 天/周/月
-        (r'最近\s*(\d+)\s*天|last\s*(\d+)\s*days?', 'last_n_days'),
-        (r'最近\s*(\d+)\s*周|last\s*(\d+)\s*weeks?', 'last_n_weeks'),
-        (r'最近\s*(\d+)\s*(个)?月|last\s*(\d+)\s*months?', 'last_n_months'),
+        # 半年（支持“近/最近/这/前/过去”前缀 + “内/来”后缀）
+        (r'(?:最近|近|这|前|过去)?\s*半年(?:内|来)?', 'half_year'),
+        # 最近/近/这/前/过去 N 天/周/月/年（支持中文数字 + “前”后缀 + “内/来”后缀）
+        (r'(?:最近|近|这|前|过去)\s*(?P<n>\d+|[一二两三四五六七八九十几]+)\s*(个)?\s*天(?:前|内|来)?|last\s*(\d+)\s*days?', 'last_n_days'),
+        (r'(?:最近|近|这|前|过去)\s*(?P<n>\d+|[一二两三四五六七八九十几]+)\s*周(?:前|内|来)?|last\s*(\d+)\s*weeks?', 'last_n_weeks'),
+        (r'(?:最近|近|这|前|过去)\s*(?P<n>\d+|[一二两三四五六七八九十几]+)\s*(个)?\s*月(?:前|内|来)?|last\s*(\d+)\s*months?', 'last_n_months'),
+        (r'(?:最近|近|这|前|过去)\s*(?P<n>\d+|[一二两三四五六七八九十几]+)\s*(个)?\s*年(?:前|内|来)?|last\s*(\d+)\s*years?', 'last_n_years'),
+        # 无前缀 N 天/周/月/年（支持“一周前”“三天”“两年”等）
+        (r'(?P<n>\d+|[一二两三四五六七八九十几]+)\s*(个)?\s*天(?:前|内|来)?', 'last_n_days'),
+        (r'(?P<n>\d+|[一二两三四五六七八九十几]+)\s*周(?:前|内|来)?', 'last_n_weeks'),
+        (r'(?P<n>\d+|[一二两三四五六七八九十几]+)\s*(个)?\s*月(?:前|内|来)?', 'last_n_months'),
+        (r'(?P<n>\d+|[一二两三四五六七八九十几]+)\s*(个)?\s*年(?:前|内|来)?', 'last_n_years'),
         # 指定月份
         (r'(\d{4})\s*年\s*(\d{1,2})\s*月', 'specific_month'),
         (r'(\d{1,2})月(份)?', 'this_year_month'),
@@ -119,19 +129,40 @@ class NLSearchParser:
     # ── 中日韩字符检测（用于构建兼容中英文的关键词边界） ──
     _CJK_RE = re.compile(r'[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]')
 
+    @staticmethod
+    def _cn_to_int(s: str) -> int:
+        """中文数字转整数，支持一到十。无法解析时返回 None。"""
+        if not s:
+            return None
+        if s.isdigit():
+            return int(s)
+        cn_map = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5,
+                  '六': 6, '七': 7, '八': 8, '九': 9, '十': 10,
+                  '两': 2, '几': 3, '數': 3}
+        if len(s) == 1:
+            return cn_map.get(s)
+        # “十一” ~ “十九”
+        if s.startswith('十') and len(s) == 2:
+            return 10 + cn_map.get(s[1], 0)
+        # “二十”“三十”等
+        if len(s) == 2 and s[1] == '十':
+            return cn_map.get(s[0], 1) * 10
+        return None
+
     @classmethod
     def _kw_pattern(cls, keyword: str) -> str:
         """为关键词生成兼容中英文的边界正则。
 
-        中文无 \b 边界，改用：前一个字符不能是关键词的首字，后一个字符不能是关键词的尾字。
-        ASCII 关键词仍使用 \b。
+        CJK 关键词：首尾字符不能是同一个字。
+        ASCII 关键词：ASCII 侧用 \b，CJK 侧用负向 lookahead/lookbehind。
         """
         kw = re.escape(keyword)
         if cls._CJK_RE.search(keyword):
             first = re.escape(keyword[0])
             last = re.escape(keyword[-1])
             return '(?<!' + first + ')' + kw + '(?!' + last + ')'
-        return r'\b' + kw + r'\b'
+        # ASCII 关键词：左侧允许 CJK 字符或 \b，右侧允许 CJK 字符或 \b
+        return '(?:(?<![a-zA-Z0-9_])' + kw + '(?![a-zA-Z0-9_]))'
 
     def parse(self, query: str) -> Dict[str, Any]:
         """解析自然语言搜索字符串，返回 FileDAO.search() 兼容的参数字典。"""
@@ -220,22 +251,46 @@ class NLSearchParser:
                 last_year_end = today.replace(month=1, day=1)
                 result['start_date'] = last_year_start.strftime('%Y-%m-%d 00:00:00')
                 result['end_date'] = last_year_end.strftime('%Y-%m-%d 00:00:00')
+            elif time_type == 'half_year':
+                result['start_date'] = (today - timedelta(days=180)).strftime('%Y-%m-%d 00:00:00')
+                result['end_date'] = (today + timedelta(days=1)).strftime('%Y-%m-%d 00:00:00')
             elif time_type == 'last_n_days':
-                n = int(m.group(1) or m.group(2) or 7)
+                try:
+                    n_str = m.group('n') or m.group(1) or m.group(2) or '7'
+                except IndexError:
+                    n_str = m.group(0) if m.group(0).isdigit() else '7'
+                n = self._cn_to_int(n_str) or 7
                 result['start_date'] = (today - timedelta(days=n)).strftime('%Y-%m-%d 00:00:00')
                 result['end_date'] = (today + timedelta(days=1)).strftime('%Y-%m-%d 00:00:00')
             elif time_type == 'last_n_weeks':
-                n = int(m.group(1) or m.group(2) or 1)
+                try:
+                    n_str = m.group('n') or m.group(1) or m.group(2) or '1'
+                except IndexError:
+                    n_str = '1'
+                n = self._cn_to_int(n_str) or 1
                 result['start_date'] = (today - timedelta(weeks=n)).strftime('%Y-%m-%d 00:00:00')
                 result['end_date'] = (today + timedelta(days=1)).strftime('%Y-%m-%d 00:00:00')
             elif time_type == 'last_n_months':
-                n = int(m.group(1) or m.group(2) or 1)
+                try:
+                    n_str = m.group('n') or m.group(1) or m.group(2) or '1'
+                except IndexError:
+                    n_str = '1'
+                n = self._cn_to_int(n_str) or 1
                 target_month = today.month - n
                 target_year = today.year
                 while target_month <= 0:
                     target_month += 12
                     target_year -= 1
                 result['start_date'] = today.replace(year=target_year, month=target_month,
+                                                      day=1).strftime('%Y-%m-%d 00:00:00')
+                result['end_date'] = (today + timedelta(days=1)).strftime('%Y-%m-%d 00:00:00')
+            elif time_type == 'last_n_years':
+                try:
+                    n_str = m.group('n') or m.group(1) or m.group(2) or '1'
+                except IndexError:
+                    n_str = '1'
+                n = self._cn_to_int(n_str) or 1
+                result['start_date'] = today.replace(year=today.year - n, month=1,
                                                       day=1).strftime('%Y-%m-%d 00:00:00')
                 result['end_date'] = (today + timedelta(days=1)).strftime('%Y-%m-%d 00:00:00')
             elif time_type == 'specific_month':
@@ -315,7 +370,9 @@ class NLSearchParser:
                           'in', '有', 'with', 'containing', 'named', '名叫', '名称', '名为',
                           '是', 'is', 'are', '找', '搜索', '查', '帮我', '请', 'please',
                           '上', '里', '内', '一些', '所有', '全部',
-                          '大文件', '小文件', '大', '小', '多', '少']
+                          '大文件', '小文件', '大', '小', '多', '少',
+                          # 时间前缀安全网（当时间模式未完全消费时的兜底清理）
+                          '最近', '近', '这', '前', '过去', '来']
             for sw in stop_words:
                 if sw.isascii():
                     remaining = re.sub(r'\b' + re.escape(sw) + r'\b', ' ', remaining, flags=re.IGNORECASE)
@@ -659,7 +716,43 @@ class CleanupAdvisor:
         total_savings = sum(c.get('potential_savings', 0) for c in summary['categories'])
         summary['total_potential_savings'] = total_savings
 
+        # ── AI 增强建议（如果可用） ──
+        summary['ai_advice'] = self._generate_ai_advice(summary)
+
         return summary
+
+    def _generate_ai_advice(self, summary: Dict[str, Any]) -> Optional[str]:
+        """调用 AI 增强清理建议。"""
+        try:
+            from core.ai_layer import AILayer
+            ai = AILayer()
+            if not ai.enabled:
+                return None
+
+            # 构建规则引擎分析结果文本
+            parts = [f"文件总数: {summary['total_active_files']}",
+                     f"总大小: {format_size(summary['total_size'])}",
+                     ""]
+            for c in summary.get('categories', []):
+                parts.append(
+                    f"- {c.get('icon','')} {c['category']}: "
+                    f"{c['count']}个, 可释放{format_size(c.get('potential_savings',0))}, "
+                    f"严重程度: {c.get('severity','low')}"
+                )
+                if c.get('description'):
+                    parts.append(f"  描述: {c['description']}")
+                if c.get('samples'):
+                    samples_text = ", ".join(
+                        str(s) if isinstance(s, str) else s.get('file_name', '')
+                        for s in c['samples'][:3]
+                    )
+                    parts.append(f"  示例: {samples_text}")
+
+            categories_text = "\n".join(parts)
+            return ai.enhance_cleanup_advice(categories_text)
+        except Exception as e:
+            logger.warning(f"AI 清理建议增强失败: {e}")
+            return None
 
     def _analyze_duplicates(self) -> Optional[Dict[str, Any]]:
         """分析重复文件"""
