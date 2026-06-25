@@ -16,7 +16,7 @@ from ui.toast import show_toast, ToastType
 from ui.scan_tab import ScanTab
 from ui.classify_tab import ClassifyTab
 from ui.search_tab import SearchTab
-from ui.ai_search_page import AiSearchPage
+from ui.ai_chat_page import AiChatPage
 from ui.history_tab import HistoryTab
 from ui.recycle_bin_tab import RecycleBinTab
 from ui.dashboard_tab import DashboardTab
@@ -140,7 +140,7 @@ class MainWindow(QMainWindow):
             ("  📂  扫描管理"),
             ("  📁  分类管理"),
             ("  🔍  文件搜索"),
-            ("  🤖  AI 搜索"),
+            ("  🤖  AI 助手"),
             ("  📋  操作历史"),
             ("  ♻️  回收区"),
             ("  🔁  重复文件"),
@@ -161,7 +161,7 @@ class MainWindow(QMainWindow):
         self.scan_tab = ScanTab(self)
         self.classify_tab = ClassifyTab(self)
         self.search_tab = SearchTab(self)
-        self.ai_search_tab = AiSearchPage(self)
+        self.ai_search_tab = AiChatPage(self)
         self.history_tab = HistoryTab(self)
         self.recycle_bin_tab = RecycleBinTab(self)
         self.duplicates_tab = DuplicatesTab(self)
@@ -224,6 +224,7 @@ class MainWindow(QMainWindow):
         self.search_tab.ai_search_clicked.connect(self._switch_to_ai_search)
         self.ai_search_tab.go_back.connect(self._on_ai_search_back)
         self.ai_search_tab.show_results.connect(self._on_ai_show_results)
+        self.ai_search_tab.navigate_to_search.connect(self._on_ai_navigate_to_search)
 
     # ── 反馈方法（供子页面调用） ──
 
@@ -254,7 +255,7 @@ class MainWindow(QMainWindow):
                        hasattr(current, 'refresh_data')
             if has_undo:
                 idx = self.stack.currentIndex()
-                names = ["仪表盘", "扫描管理", "分类管理", "文件搜索", "AI搜索", "操作历史", "回收区", "重复文件", "标签管理", "系统设置"]
+                names = ["仪表盘", "扫描管理", "分类管理", "文件搜索", "AI助手", "操作历史", "回收区", "重复文件", "标签管理", "系统设置"]
                 self.show_toast(f"当前页面({names[idx]})不支持撤销", ToastType.INFO, 2000)
 
     def _on_search_shortcut(self):
@@ -297,6 +298,11 @@ class MainWindow(QMainWindow):
     def _on_ai_search_back(self):
         """从 AI 搜索页返回文件搜索页"""
         self.switch_to_tab(3)  # 文件搜索页 index=3
+
+    def _on_ai_navigate_to_search(self, params: dict):
+        """从 AI 助手工具卡片跳转到搜索 Tab，并回填参数"""
+        self.switch_to_tab(3)  # 文件搜索页 index=3
+        self.search_tab._apply_search_params(params, source="AI 助手")
 
     def _on_ai_show_results(self, result: dict):
         """AI 搜索完成后，将结果填入文件搜索表格"""

@@ -107,48 +107,82 @@ class ToolRegistry:
 # 预设工具：文件搜索
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _search_files_handler(query: str, file_type: str = None,
-                          max_results: int = 20, _db=None, _ai_layer=None) -> str:
-    """搜索本地文件数据库"""
+def _search_files_handler(query: str = None, file_type: str = None,
+                          start_date: str = None, end_date: str = None,
+                          min_size: int = None, max_size: int = None,
+                          max_results: int = 500, _db=None, _ai_layer=None) -> str:
+    """搜索本地文件数据库 —— 支持关键词、日期范围、大小范围、文件类型过滤"""
     if _db is None:
         return "[错误] 文件搜索工具未连接数据库"
 
     try:
-        sql = "SELECT file_name, file_path, file_type, file_size, modify_time FROM files WHERE 1=1"
-        params = []
+        # 使用 FileDAO.search() 的结构化查询
+        from database.models import FileDAO
+        from utils.display_utils import format_size as fmt
 
-        # 关键词搜索（文件名或路径模糊匹配）
-        keywords = re.split(r'[\s\|,，、]+', query.strip()) if query.strip() else []
-        if keywords:
-            like_clauses = []
-            for kw in keywords[:5]:  # 最多 5 个关键词
-                kw = kw.strip()
-                if kw:
-                    like_clauses.append("(file_name LIKE %s OR file_path LIKE %s)")
-                    params.extend([f"%{kw}%", f"%{kw}%"])
-            if like_clauses:
-                sql += " AND (" + " OR ".join(like_clauses) + ")"
+        file_dao = FileDAO(_db)
 
-        # 文件类型过滤
-        if file_type:
-            sql += " AND file_type = %s"
-            params.append(file_type)
+        # 处理 query：如果不是纯文件名关键词，可能包含日期/大小语义
+        # FileDAO.search 只接受单个 name，所以取 query 整体或拆第一个词
+        name = query.strip() if query else None
 
-        sql += " ORDER BY modify_time DESC LIMIT %s"
-        params.append(max_results)
+        rows = file_dao.search(
+            name=name,
+            file_type=file_type,
+            min_size=min_size,
+            max_size=max_size,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
-        rows = _db.execute_query(sql, tuple(params))
+        # 限制返回数量
+        rows = rows[:max_results]
 
         if not rows:
-            return f"未找到与 '{query}' 相关的文件。"
+            parts = []
+            if query:
+                parts.append(f"关键词: {query}")
+            if file_type:
+                from config import FILE_TYPE_NAMES
+                parts.append(f"类型: {FILE_TYPE_NAMES.get(file_type, file_type)}")
+            if start_date or end_date:
+                parts.append(f"日期: {start_date or '不限'} ~ {end_date or '不限'}")
+            if min_size is not None or max_size is not None:
+                sz = []
+                if min_size is not None:
+                    sz.append(f"≥{_format_bytes(min_size)}")
+                if max_size is not None:
+                    sz.append(f"≤{_format_bytes(max_size)}")
+                parts.append(f"大小: {' '.join(sz)}")
+            desc = "、".join(parts) if parts else "该条件"
+            return f"未找到符合条件（{desc}）的文件。"
 
-        lines = [f"找到 {len(rows)} 个相关文件（搜索词: {query}）:"]
+        # 按修改时间倒序
+        from datetime import datetime
+        def _sort_key(r):
+            mt = r.get('modify_time')
+            if isinstance(mt, datetime):
+                return mt
+            if isinstance(mt, str):
+                try:
+                    return datetime.strptime(mt[:19], "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    pass
+            return datetime.min
+        rows.sort(key=_sort_key, reverse=True)
+
+        total_size = sum(r.get('file_size', 0) for r in rows)
+        lines = [f"找到 {len(rows)} 个文件（总大小: {_format_bytes(total_size)}）:"]
         for r in rows:
             size_str = _format_bytes(r.get('file_size', 0))
+            mt = r.get('modify_time', '')
+            if isinstance(mt, datetime):
+                mt = mt.strftime("%Y-%m-%d")
+            elif isinstance(mt, str) and len(mt) >= 10:
+                mt = mt[:10]
             lines.append(
-                f"- {r['file_name']} ({size_str}) "
-                f"类型:{r.get('file_type','unknown')} "
-                f"路径:{r['file_path']}"
+                f"- {r['file_name']} | {size_str} | 修改:{mt} | "
+                f"类型:{r.get('file_type','?')} | {r['file_path']}"
             )
         return "\n".join(lines)
 
@@ -161,20 +195,36 @@ _search_files_schema = {
     "properties": {
         "query": {
             "type": "string",
-            "description": "搜索关键词，多个关键词用空格或逗号分隔"
+            "description": "文件名或路径关键词。如果用户说'近一年的文档'且没有具体文件名，query可以不传，用start_date+file_type替代"
         },
         "file_type": {
             "type": "string",
             "enum": ["image", "document", "code", "video", "audio", "archive", "executable", "font", "other"],
-            "description": "可选的文件类型过滤"
+            "description": "文件类型过滤，如用户说'文档'则传 'document'"
+        },
+        "start_date": {
+            "type": "string",
+            "description": "文件修改时间起始日期，格式 YYYY-MM-DD。用户说'近一年'推算为一年前今天"
+        },
+        "end_date": {
+            "type": "string",
+            "description": "文件修改时间截止日期，格式 YYYY-MM-DD。用户说'近一年'则end_date为今天"
+        },
+        "min_size": {
+            "type": "integer",
+            "description": "最小文件大小（字节）。用户说'大于100MB'则传 104857600"
+        },
+        "max_size": {
+            "type": "integer",
+            "description": "最大文件大小（字节）。用户说'小于1GB'则传 1073741824"
         },
         "max_results": {
             "type": "integer",
-            "description": "最大返回条数，默认 20",
-            "default": 20
+            "description": "最大返回条数。默认 500，结果少时传小值节省上下文，需要大量结果时才传大值（最多 2000）。",
+            "default": 500
         }
     },
-    "required": ["query"]
+    "required": []
 }
 
 
@@ -203,128 +253,180 @@ def _get_web_client() -> httpx.Client:
     global _WEB_SEARCH_CLIENT
     if _WEB_SEARCH_CLIENT is None:
         _WEB_SEARCH_CLIENT = httpx.Client(
-            timeout=httpx.Timeout(15.0),
+            timeout=httpx.Timeout(30.0),
             headers={"User-Agent": "SmartFileManager/2.0 (AI Assistant)"},
             follow_redirects=True,
         )
     return _WEB_SEARCH_CLIENT
 
 
-def _search_web_handler(query: str, max_results: int = 5) -> str:
-    """联网搜索（使用 DuckDuckGo HTML 接口，免费无需 API key）"""
+# SearXNG 公共实例列表（免费、开源、无需 API Key）
+_SEARXNG_INSTANCES = [
+    "https://search.sapti.me",
+    "https://searx.be",
+    "https://search.bus-hit.me",
+    "https://searx.tiekoetter.com",
+    "https://search.rhscz.eu",
+]
+
+
+def _get_bocha_key() -> Optional[str]:
+    """获取博查 API Key（环境变量或 config）"""
+    key = os.getenv("BOCHA_API_KEY", "")
+    if key:
+        return key
+    try:
+        from config import AI_CONFIG
+        return AI_CONFIG.get("bocha_api_key", "") or ""
+    except Exception:
+        return ""
+
+
+def _search_with_bocha(query: str, max_results: int) -> Optional[str]:
+    """博查 Web Search API（免费 2000次/月，需 API Key）
+    注册地址: https://open.bochaai.com
+    """
+    api_key = _get_bocha_key()
+    if not api_key:
+        logger.debug("博查 API Key 未配置，跳过")
+        return None
+    try:
+        with httpx.Client(
+            timeout=httpx.Timeout(8.0),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "SmartFileManager/2.0",
+            },
+        ) as client:
+            logger.debug(f"博查搜索: {query[:30]}...")
+            resp = client.post(
+                "https://api.bocha.cn/v1/web-search",
+                json={"query": query, "freshness": "noLimit", "summary": True, "count": max_results},
+            )
+            logger.debug(f"博查响应: HTTP {resp.status_code}")
+            if resp.status_code != 200:
+                logger.warning(f"博查 API 错误: HTTP {resp.status_code}, {resp.text[:200]}")
+                return None
+            data = resp.json()
+            if data.get("code") != 200:
+                logger.warning(f"博查业务错误: code={data.get('code')}, msg={data.get('msg', 'unknown')}")
+                return None
+            entries = data.get("data", {}).get("webPages", {}).get("value", [])
+            if not entries:
+                logger.debug("博查返回空结果")
+                return None
+            lines = [f"网页搜索 '{query}' 的结果 (via Bocha):"]
+            for i, e in enumerate(entries[:max_results]):
+                lines.append(f"{i+1}. {e.get('name','无标题')}")
+                snippet = e.get("snippet", e.get("summary", ""))
+                if snippet:
+                    lines.append(f"   {snippet[:200]}")
+                if e.get("url"):
+                    lines.append(f"   链接: {e['url']}")
+            logger.info(f"博查搜索成功: {len(entries)} 条结果")
+            return "\n".join(lines)
+    except httpx.TimeoutException:
+        logger.warning("博查搜索超时，回退下一个后端")
+        return None
+    except Exception as e:
+        logger.error(f"博查搜索异常: {e}")
+        return None
+
+
+def _search_with_searxng(query: str, max_results: int) -> Optional[str]:
+    """SearXNG 公共实例（免费、无需 API Key）"""
+    for instance in _SEARXNG_INSTANCES:
+        try:
+            client = _get_web_client()
+            resp = client.get(
+                f"{instance}/search",
+                params={
+                    "q": query,
+                    "format": "json",
+                    "language": "zh-CN",
+                    "categories": "general",
+                    "engines": "google,bing,wikipedia,duckduckgo",
+                },
+            )
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+            entries = data.get("results", [])
+            if not entries:
+                continue
+            lines = [f"网页搜索 '{query}' 的结果 (via SearXNG):"]
+            for i, entry in enumerate(entries[:max_results]):
+                title = entry.get("title", "无标题")
+                snippet = entry.get("content", entry.get("snippet", ""))
+                url = entry.get("url", "")
+                lines.append(f"{i + 1}. {title}")
+                if snippet:
+                    lines.append(f"   {snippet[:200]}")
+                if url:
+                    lines.append(f"   链接: {url}")
+            return "\n".join(lines)
+        except httpx.TimeoutException:
+            continue
+        except Exception:
+            continue
+    return None
+
+
+def _search_with_duckduckgo(query: str, max_results: int) -> Optional[str]:
+    """DuckDuckGo Instant Answer API（回退）"""
     try:
         client = _get_web_client()
-
-        # 使用 DuckDuckGo Lite 的 HTML 版本（更稳定）
-        resp = client.post(
-            "https://lite.duckduckgo.com/lite/",
-            data={"q": query, "kl": "wt-wt"},
+        resp = client.get(
+            "https://api.duckduckgo.com/",
+            params={"q": query, "format": "json", "no_html": 1, "skip_disambig": 1},
         )
-
         if resp.status_code != 200:
-            # 回退：尝试 DuckDuckGo Instant Answer API
-            resp2 = client.get(
-                "https://api.duckduckgo.com/",
-                params={"q": query, "format": "json", "no_html": 1, "skip_disambig": 1},
-            )
-            if resp2.status_code == 200:
-                data = resp2.json()
-                results = []
-                if data.get("AbstractText"):
-                    results.append(f"摘要: {data['AbstractText']}")
-                if data.get("RelatedTopics"):
-                    for topic in data["RelatedTopics"][:max_results]:
-                        if isinstance(topic, dict) and topic.get("Text"):
-                            results.append(f"- {topic['Text']}")
-                if results:
-                    return "\n".join(results)
+            return None
+        data = resp.json()
+        results = []
+        if data.get("AbstractText"):
+            results.append(f"摘要: {data['AbstractText']}")
+        if data.get("RelatedTopics"):
+            for topic in data["RelatedTopics"][:max_results]:
+                if isinstance(topic, dict) and topic.get("Text"):
+                    results.append(f"- {topic['Text']}")
+        if results:
+            return "\n".join(results)
+    except Exception:
+        pass
+    return None
 
-            return f"[联网搜索] 搜索 '{query}' 未获取到结果 (HTTP {resp.status_code})"
 
-        # 解析 DuckDuckGo Lite HTML 结果
-        from html.parser import HTMLParser
+def _search_web_handler(query: str, max_results: int = 5) -> str:
+    """联网搜索 —— 博查（可配置）> SearXNG > DuckDuckGo 三级回退
 
-        class ResultParser(HTMLParser):
-            def __init__(self):
-                super().__init__()
-                self.results = []
-                self._in_link = False
-                self._in_snippet = False
-                self._current_title = ""
-                self._current_link = ""
-                self._current_snippet = ""
-                self._row_count = 0
+    优先级：
+    1. 博查 API（如果配置了 BOCHA_API_KEY 环境变量）
+    2. SearXNG 公共实例（5 个实例轮流尝试）
+    3. DuckDuckGo Instant Answer（最终回退）
+    """
 
-            def handle_starttag(self, tag, attrs):
-                attrs_dict = dict(attrs)
-                if tag == "a" and "class" in attrs_dict and "result-link" in attrs_dict.get("class", ""):
-                    self._in_link = True
-                    self._current_link = attrs_dict.get("href", "")
-                elif tag == "td" and "class" in attrs_dict and "result-snippet" in attrs_dict.get("class", ""):
-                    self._in_snippet = True
+    # ── 方案 A：博查 Web Search API（需 API Key）──
+    result = _search_with_bocha(query, max_results)
+    if result:
+        return result
 
-            def handle_endtag(self, tag):
-                if tag == "a" and self._in_link:
-                    self._in_link = False
-                    self._row_count += 1
-                elif tag == "td" and self._in_snippet:
-                    self._in_snippet = False
-                    if self._current_title or self._current_snippet:
-                        self.results.append({
-                            "title": self._current_title.strip(),
-                            "link": self._current_link.strip(),
-                            "snippet": self._current_snippet.strip(),
-                        })
-                        self._current_title = ""
-                        self._current_link = ""
-                        self._current_snippet = ""
-                        self._row_count = 0
+    # ── 方案 B：SearXNG 公共实例 ──
+    result = _search_with_searxng(query, max_results)
+    if result:
+        return result
 
-            def handle_data(self, data):
-                if self._in_link:
-                    self._current_title += data
-                elif self._in_snippet:
-                    self._current_snippet += data
+    # ── 方案 C：DuckDuckGo ──
+    result = _search_with_duckduckgo(query, max_results)
+    if result:
+        return result
 
-        parser = ResultParser()
-        parser.feed(resp.text)
-
-        # 如果正则解析不到，尝试简单提取链接
-        if not parser.results:
-            link_pattern = re.findall(
-                r'<a[^>]*href="(https?://[^"]+)"[^>]*class="[^"]*result-link[^"]*"[^>]*>(.*?)</a>',
-                resp.text, re.DOTALL
-            )
-            snippet_pattern = re.findall(
-                r'<td[^>]*class="[^"]*result-snippet[^"]*"[^>]*>(.*?)</td>',
-                resp.text, re.DOTALL
-            )
-            for i, (link, title) in enumerate(link_pattern[:max_results]):
-                title_clean = re.sub(r'<[^>]+>', '', title).strip()
-                snippet_clean = ""
-                if i < len(snippet_pattern):
-                    snippet_clean = re.sub(r'<[^>]+>', '', snippet_pattern[i]).strip()
-                parser.results.append({
-                    "title": title_clean,
-                    "link": link,
-                    "snippet": snippet_clean,
-                })
-
-        if not parser.results:
-            return f"搜索 '{query}' 未找到网页结果。"
-
-        lines = [f"网页搜索 '{query}' 的结果:"]
-        for i, r in enumerate(parser.results[:max_results], 1):
-            lines.append(f"{i}. {r['title']}")
-            if r['snippet']:
-                lines.append(f"   {r['snippet'][:200]}")
-            lines.append(f"   链接: {r['link']}")
-
-        return "\n".join(lines)
-
-    except Exception as e:
-        logger.error(f"联网搜索失败: {e}")
-        return f"[联网搜索错误] {e}。可尝试用其他搜索词重试。"
+    return (
+        "[联网搜索失败] 所有搜索后端均不可用。\n"
+        "建议：1. 检查网络连接  2. 设置 BOCHA_API_KEY 环境变量获取博查 API\n"
+        "博查注册: https://open.bochaai.com （免费 2000次/月）"
+    )
 
 
 _search_web_schema = {
@@ -348,7 +450,7 @@ def create_search_web_tool() -> ToolDefinition:
     """创建联网搜索工具"""
     return ToolDefinition(
         name="search_web",
-        description="联网搜索互联网信息。当你需要获取实时信息、最新资讯、技术文档、行业动态等本地文件之外的知识时使用。",
+        description="联网搜索互联网信息。当你需要获取实时信息、最新资讯、技术文档、行业动态等本地文件之外的知识时使用。使用博查/SearXNG/DuckDuckGo 三级回退，完全免费。",
         parameters=_search_web_schema,
         handler=_search_web_handler,
     )
@@ -358,8 +460,8 @@ def create_search_web_tool() -> ToolDefinition:
 # 预设工具：读取本地文件
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _read_file_handler(file_path: str, max_chars: int = 3000) -> str:
-    """读取本地文件内容"""
+def _read_file_handler(file_path: str, max_chars: int = 8000) -> str:
+    """读取本地文件内容 —— 智能识别类型：.docx/.pdf/.pptx 用专用库提取文本"""
     # 安全检查：禁止读取系统敏感文件
     dangerous_patterns = [
         r'(^|[/\\])\.env$', r'/etc/(passwd|shadow)', r'\\Windows\\System32\\',
@@ -376,21 +478,100 @@ def _read_file_handler(file_path: str, max_chars: int = 3000) -> str:
         return f"[错误] 不是文件: {file_path}"
 
     file_size = os.path.getsize(file_path)
+    size_str = _format_bytes(file_size)
     if file_size > 10 * 1024 * 1024:  # 超过 10MB 拒绝读取
-        return f"[跳过] 文件过大 ({_format_bytes(file_size)})，拒绝读取内容"
+        return f"[跳过] 文件过大 ({size_str})，拒绝读取内容"
 
-    # 检查是否为文本文件
+    ext = os.path.splitext(file_path)[1].lower()
+    basename = os.path.basename(file_path)
+
+    # ── .docx 文档 ──
+    if ext == '.docx':
+        try:
+            from docx import Document
+            doc = Document(file_path)
+            paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+            content = "\n".join(paragraphs)  # 所有段落
+            if not content:
+                return f"[空文档] {basename} ({size_str}) — 文档中未发现可见文本内容"
+            truncated = " ...(内容已截断)" if len(content) > max_chars else ""
+            return f"文件: {basename} ({size_str}, 提取 {min(len(content), max_chars)} 字符) [Word 文档]:\n```\n{content[:max_chars]}{truncated}\n```"
+        except Exception as e:
+            return f"[读取错误] 无法解析 Word 文档 {basename}: {e}"
+
+    # ── .pdf 文档 ──
+    if ext == '.pdf':
+        try:
+            import fitz  # PyMuPDF
+            doc = fitz.open(file_path)
+            page_count = doc.page_count
+            full_text = ""
+            for page in doc:
+                full_text += page.get_text()
+            doc.close()
+            if not full_text.strip():
+                return f"[空文档] {basename} ({size_str}, {page_count}页) — PDF 中未发现可见文本（可能是扫描版图片 PDF）"
+            truncated = " ...(内容已截断)" if len(full_text) > max_chars else ""
+            return (
+                f"文件: {basename} ({size_str}, {page_count}页, 提取 {min(len(full_text), max_chars)} 字符) [PDF 文档]:\n"
+                f"```\n{full_text[:max_chars]}{truncated}\n```"
+            )
+        except Exception as e:
+            return f"[读取错误] 无法解析 PDF 文档 {basename}: {e}"
+
+    # ── .pptx 演示文稿 ──
+    if ext == '.pptx':
+        try:
+            from pptx import Presentation
+            prs = Presentation(file_path)
+            slides = []
+            for slide in prs.slides:
+                texts = []
+                for shape in slide.shapes:
+                    if shape.has_text_frame:
+                        for para in shape.text_frame.paragraphs:
+                            t = para.text.strip()
+                            if t:
+                                texts.append(t)
+                if texts:
+                    slides.append("\n".join(texts))
+            content = "\n---\n".join(slides)
+            if not content.strip():
+                return f"[空文档] {basename} ({size_str}) — PPT 中未发现可见文本"
+            truncated = " ...(内容已截断)" if len(content) > max_chars else ""
+            return f"文件: {basename} ({size_str}, 提取 {min(len(content), max_chars)} 字符) [PPT 演示文稿]:\n```\n{content[:max_chars]}{truncated}\n```"
+        except Exception as e:
+            return f"[读取错误] 无法解析 PPT 文件 {basename}: {e}"
+
+    # ── 图片/音频/视频 ──
+    binary_exts = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.ico', '.svg',
+                   '.mp3', '.wav', '.flac', '.aac', '.ogg', '.wma', '.m4a',
+                   '.mp4', '.avi', '.mkv', '.mov', '.wmv', '.webm',
+                   '.zip', '.rar', '.7z', '.tar', '.gz',
+                   '.exe', '.dll', '.msi', '.apk', '.dmg', '.iso',
+                   '.ttf', '.otf', '.woff', '.woff2'}
+    if ext in binary_exts:
+        return f"[二进制文件] {basename} ({size_str}) — 无法提取文本内容（{ext} 格式）"
+
+    # ── 文本文件（代码、配置、.txt 等） ──
     try:
         with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read(max_chars)
     except Exception as e:
-        return f"[读取错误] 无法读取文件 {file_path}: {e}"
+        return f"[读取错误] 无法读取文件 {basename}: {e}"
+
+    # 检测是否实际为二进制乱码（虽然读出来了但基本不可打印）
+    printable_ratio = sum(1 for c in content if c.isprintable() or c in '\n\r\t ') / max(len(content), 1)
+    if printable_ratio < 0.3:
+        return f"[二进制文件] {basename} ({size_str}) — 内容为二进制格式，无法提取文本"
+
+    if not content.strip():
+        return f"[空文件] {basename} ({size_str})"
 
     truncated = " ...(内容已截断)" if len(content) >= max_chars else ""
-    ext = os.path.splitext(file_path)[1].lower()
     lang = ext.lstrip(".") if ext else "text"
 
-    return f"文件: {os.path.basename(file_path)} ({_format_bytes(file_size)}):\n```{lang}\n{content}{truncated}\n```"
+    return f"文件: {basename} ({size_str}):\n```{lang}\n{content}{truncated}\n```"
 
 
 _read_file_schema = {
@@ -402,8 +583,8 @@ _read_file_schema = {
         },
         "max_chars": {
             "type": "integer",
-            "description": "最大返回字符数，默认 3000",
-            "default": 3000
+            "description": "最大返回字符数，默认 8000（约2-3页中文文本）",
+            "default": 8000
         }
     },
     "required": ["file_path"]
@@ -414,7 +595,7 @@ def create_read_file_tool() -> ToolDefinition:
     """创建文件读取工具"""
     return ToolDefinition(
         name="read_file",
-        description="读取本地文件内容。当你需要查看文件具体内容时使用。支持代码、文档、配置文件等文本文件。注意：只能读取文本文件。",
+        description="读取本地文件内容并提取文本。支持常见格式：.txt/.md/.py/.js 等文本文件、.docx Word文档、.pdf（含文字）、.pptx 演示文稿。图片/音视频等二进制文件会提示无法读取。",
         parameters=_read_file_schema,
         handler=_read_file_handler,
     )
