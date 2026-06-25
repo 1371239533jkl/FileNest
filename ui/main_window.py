@@ -223,6 +223,7 @@ class MainWindow(QMainWindow):
         # ── 页面间信号连接 ──
         self.search_tab.ai_search_clicked.connect(self._switch_to_ai_search)
         self.ai_search_tab.go_back.connect(self._on_ai_search_back)
+        self.ai_search_tab.show_results.connect(self._on_ai_show_results)
 
     # ── 反馈方法（供子页面调用） ──
 
@@ -296,6 +297,10 @@ class MainWindow(QMainWindow):
     def _on_ai_search_back(self):
         """从 AI 搜索页返回文件搜索页"""
         self.switch_to_tab(3)  # 文件搜索页 index=3
+
+    def _on_ai_show_results(self, result: dict):
+        """AI 搜索完成后，将结果填入文件搜索表格"""
+        self.search_tab.display_ai_results(result)
 
     def _open_command_palette(self):
         """Ctrl+Shift+P → 打开命令面板"""

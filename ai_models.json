@@ -8,7 +8,7 @@
       "api_key": "sk-iptavzohagnikhsytfcskwvltkllqevloacsrnqslgmxhzzp",
       "model": "deepseek-ai/DeepSeek-V3",
       "models": "deepseek-ai/DeepSeek-V3,Pro/deepseek-ai/DeepSeek-R1,Qwen/Qwen2.5-7B-Instruct",
-      "timeout": 20.0
+      "timeout": 60.0
     }
   }
 }
