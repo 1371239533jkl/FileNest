@@ -3,7 +3,7 @@
 """
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QListWidget, QStackedWidget, QLabel, QPushButton,
+    QListWidget, QListWidgetItem, QStackedWidget, QLabel, QPushButton,
     QMessageBox, QSplitter, QStatusBar
 )
 from PyQt6.QtCore import Qt
@@ -53,7 +53,7 @@ class MainWindow(QMainWindow):
             logger.error(f"数据库初始化失败: {e}")
             QMessageBox.critical(
                 self, "数据库错误",
-                f"无法连接MySQL数据库，请检查config.py中的数据库配置。\n\n错误: {e}")
+                f"无法初始化 SQLite 数据库。\n\n错误: {e}")
 
     def _init_theme_manager(self):
         self.theme_manager = ThemeManager()
@@ -64,24 +64,18 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(style)
 
         if hasattr(self, 'theme_btn'):
-            self.theme_btn.setText(" 🌙 浅色" if theme_name == "dark" else " ☀️ 深色")
+            self.theme_btn.setText("🌙" if theme_name == "dark" else "☀️")
 
         if hasattr(self, 'version_label'):
-            c = "#585b70" if theme_name == "dark" else "#acb0be"
+            c = "#6b6b7b" if theme_name == "dark" else "#64748b"
             self.version_label.setStyleSheet(f"font-size: 11px; color: {c}; background: transparent; border: none;")
 
         # 通知各页面主题变更
-        if hasattr(self, 'scan_tab'):
-            self.theme_manager.apply_theme_to_widget(self.dashboard_tab, theme_name)
-            self.theme_manager.apply_theme_to_widget(self.scan_tab, theme_name)
-            self.theme_manager.apply_theme_to_widget(self.classify_tab, theme_name)
-            self.theme_manager.apply_theme_to_widget(self.search_tab, theme_name)
-            self.theme_manager.apply_theme_to_widget(self.ai_search_tab, theme_name)
-            self.theme_manager.apply_theme_to_widget(self.history_tab, theme_name)
-            self.theme_manager.apply_theme_to_widget(self.recycle_bin_tab, theme_name)
-            self.theme_manager.apply_theme_to_widget(self.duplicates_tab, theme_name)
-            self.theme_manager.apply_theme_to_widget(self.tags_tab, theme_name)
-            self.theme_manager.apply_theme_to_widget(self.settings_tab, theme_name)
+        if hasattr(self, 'stack'):
+            for i in range(self.stack.count()):
+                w = self.stack.widget(i)
+                if w:
+                    self.theme_manager.apply_theme_to_widget(w, theme_name)
 
     def _toggle_theme(self):
         new_theme = "light" if self._current_theme == "dark" else "dark"
@@ -110,52 +104,51 @@ class MainWindow(QMainWindow):
         header_layout.addStretch()
 
         # 主题切换按钮
-        self.theme_btn = QPushButton(" 🌙 浅色")
+        self.theme_btn = QPushButton("🌙")
         self.theme_btn.setObjectName("themeToggleBtn")
-        self.theme_btn.setFixedHeight(32)
+        self.theme_btn.setFixedSize(40, 32)
         self.theme_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.theme_btn.clicked.connect(self._toggle_theme)
         header_layout.addWidget(self.theme_btn)
 
         self.version_label = QLabel(f"v{APP_VERSION}")
-        self.version_label.setStyleSheet("font-size: 11px; color: #585b70; background: transparent; border: none;")
+        self.version_label.setStyleSheet("font-size: 11px; color: #6b6b7b; background: transparent; border: none;")
         header_layout.addWidget(self.version_label)
 
         layout.addWidget(header)
 
-        # ── 主体区域：侧边导航 + 内容面板 ──
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setHandleWidth(0)  # 隐藏分割手柄
+        # ── 主体区域：图标导航 + 内容面板 ──
+        body_layout = QHBoxLayout()
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
 
-        # 左侧导航
+        # 左侧图标导航栏
         self.nav_list = QListWidget()
         self.nav_list.setObjectName("navSidebar")
-        self.nav_list.setFixedWidth(180)
-        self.nav_list.setMinimumWidth(140)
-        self.nav_list.setMaximumWidth(220)
-        self.nav_list.setSpacing(2)
+        self.nav_list.setFixedWidth(52)
+        self.nav_list.setMinimumWidth(52)
+        self.nav_list.setMaximumWidth(52)
+        self.nav_list.setSpacing(0)
+        self.nav_list.setFlow(QListWidget.Flow.TopToBottom)
+        self.nav_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.nav_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
-        nav_items = [
-            ("  📊  仪表盘"),
-            ("  📂  扫描管理"),
-            ("  📁  分类管理"),
-            ("  🔍  文件搜索"),
-            ("  🤖  AI 助手"),
-            ("  📋  操作历史"),
-            ("  ♻️  回收区"),
-            ("  🔁  重复文件"),
-            ("  🏷️  标签管理"),
-            ("  ⚙️  系统设置"),
-        ]
-        for text in nav_items:
-            self.nav_list.addItem(text)
+        # 图标 + 索引映射
+        nav_icons = ["\U0001F4CA", "\U0001F4C2", "\U0001F4C1", "\U0001F50D", "\U0001F916", "\U0001F4CB", "\U0001F504", "\U0001F503", "\U0001F3F7", "\u2699"]
+        nav_tips = ["仪表盘", "扫描管理", "分类管理", "文件搜索", "AI 助手", "操作历史", "回收区", "重复文件", "标签管理", "系统设置"]
+        for icon, tip in zip(nav_icons, nav_tips):
+            item = QListWidgetItem(icon)
+            item.setToolTip(tip)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.nav_list.addItem(item)
 
         self.nav_list.currentRowChanged.connect(self._on_nav_changed)
-        splitter.addWidget(self.nav_list)
+        body_layout.addWidget(self.nav_list, 0)
 
         # 右侧内容面板
         self.stack = QStackedWidget()
         self.stack.setObjectName("contentPanel")
+        self.stack.setContentsMargins(16, 16, 16, 16)
 
         self.dashboard_tab = DashboardTab(self)
         self.scan_tab = ScanTab(self)
@@ -179,11 +172,8 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.tags_tab)
         self.stack.addWidget(self.settings_tab)
 
-        splitter.addWidget(self.stack)
-
-        # 设置初始比例（导航:内容 = 180:剩余）
-        splitter.setSizes([180, WINDOW_WIDTH - 180])
-        layout.addWidget(splitter, 1)
+        body_layout.addWidget(self.stack, 1)
+        layout.addLayout(body_layout, 1)
 
         # 默认选中第一个
         self.nav_list.setCurrentRow(0)

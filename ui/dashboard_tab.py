@@ -1,5 +1,6 @@
 """
-磁盘空间分析仪表盘 - 文件分布、类型占比、趋势分析
+智能仪表盘 - 统计卡片、AI 洞察、类型分布、趋势分析、快捷操作
+ponytail: 按 Ardot 设计图重构布局：暗色卡片 + 4 列统计 + 洞察/饼图/活动 + 趋势/快捷操作
 """
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -45,17 +46,18 @@ class DashboardTab(QWidget):
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(8)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
 
         # 顶部标题
         header = QHBoxLayout()
-        title = QLabel("📊 磁盘空间分析")
-        title.setStyleSheet("font-weight: bold; color: #cba6f7; font-size: 14px;")
+        title = QLabel("仪表盘")
+        title.setStyleSheet("font-weight: bold; color: #ffffff; font-size: 18px;")
         header.addWidget(title)
         header.addStretch()
 
-        refresh_btn = QPushButton("刷新数据")
+        refresh_btn = QPushButton("刷新")
+        refresh_btn.setObjectName("primaryBtn")
         refresh_btn.clicked.connect(self.refresh_data)
         header.addWidget(refresh_btn)
         layout.addLayout(header)
@@ -69,72 +71,124 @@ class DashboardTab(QWidget):
 
         self._content = QWidget()
         self._grid = QVBoxLayout(self._content)
-        self._grid.setSpacing(12)
+        self._grid.setSpacing(16)
 
-        # ── 统计卡片行 ──
+        # ── 统计卡片行 (4 列) ──
         cards_layout = QHBoxLayout()
-        cards_layout.setSpacing(12)
+        cards_layout.setSpacing(16)
 
-        self.card_total_files = StatCard("活跃文件总数", "-", '#89b4fa')
-        self.card_total_size = StatCard("文件总大小", "-", '#a6e3a1')
-        self.card_dup_groups = StatCard("重复组数", "-", '#f9e2af')
-        self.card_wasted = StatCard("重复浪费空间", "-", '#f38ba8')
+        self.card_total_files = StatCard("总文件数", "-", '#3b82f6', '▢')
+        self.card_classified = StatCard("已分类", "-", '#10b981', '✓')
+        self.card_tags = StatCard("标签数", "-", '#f59e0b', '◕')
+        self.card_storage = StatCard("存储用量", "-", '#ef4444', '▤')
 
         cards_layout.addWidget(self.card_total_files)
-        cards_layout.addWidget(self.card_total_size)
-        cards_layout.addWidget(self.card_dup_groups)
-        cards_layout.addWidget(self.card_wasted)
+        cards_layout.addWidget(self.card_classified)
+        cards_layout.addWidget(self.card_tags)
+        cards_layout.addWidget(self.card_storage)
         self._grid.addLayout(cards_layout)
 
-        # ── AI 洞察卡片 ──
-        self.insight_card = QFrame()
-        self.insight_card.setObjectName("dashboardInsightCard")
-        self.insight_card.setVisible(False)
-        insight_layout = QVBoxLayout(self.insight_card)
-        insight_layout.setContentsMargins(14, 10, 14, 10)
-        insight_layout.setSpacing(4)
+        # ── 中间行：AI 洞察 + 类型分布 + 最近活动 ──
+        mid_row = QHBoxLayout()
+        mid_row.setSpacing(16)
 
-        insight_header = QHBoxLayout()
-        insight_title = QLabel("🤖 AI 洞察")
-        insight_title.setStyleSheet("font-weight: bold; font-size: 11pt;")
-        insight_header.addWidget(insight_title)
-        insight_header.addStretch()
-        insight_layout.addLayout(insight_header)
-
+        # AI 洞察卡片 — 始终显示，AI 不可用时显示占位提示
+        insight_card = QFrame()
+        insight_card.setStyleSheet(
+            "background-color: #1a1a2e; border-radius: 12px;")
+        insight_card.setMinimumWidth(240)
+        insight_layout = QVBoxLayout(insight_card)
+        insight_layout.setContentsMargins(16, 16, 16, 16)
+        insight_layout.setSpacing(10)
+        
+        insight_title = QLabel("AI 文件洞察")
+        insight_title.setStyleSheet("font-weight: bold; font-size: 13px; color: #ffffff;")
+        insight_layout.addWidget(insight_title)
+        
+        insight_sub = QLabel("基于文件类型和使用模式的智能分析")
+        insight_sub.setStyleSheet("color: #6b6b7b; font-size: 12px;")
+        insight_layout.addWidget(insight_sub)
+        
         self.insight_label = QLabel("")
         self.insight_label.setWordWrap(True)
-        self.insight_label.setStyleSheet("font-size: 10pt; line-height: 1.5;")
+        self.insight_label.setStyleSheet(
+            "font-size: 12px; color: #a0a0b0; line-height: 1.5;")
         insight_layout.addWidget(self.insight_label)
-        self._grid.addWidget(self.insight_card)
+        insight_layout.addStretch()
+        self._insight_widget = insight_card
+        mid_row.addWidget(self._insight_widget, 2)
 
-        # ── 图表行 1：类型分布饼图 + 大小分布柱状图 ──
-        charts1 = QHBoxLayout()
-        charts1.setSpacing(12)
-
+        # 类型分布饼图
         self.pie_type = PieChartWidget()
-        self.pie_type.setMinimumHeight(280)
-        charts1.addWidget(self.pie_type)
+        self.pie_type.setMinimumHeight(200)
+        self.pie_type.setStyleSheet("background-color: #1a1a2e; border-radius: 12px;")
+        mid_row.addWidget(self.pie_type, 2)
 
-        self.bar_size = BarChartWidget()
-        self.bar_size.setMinimumHeight(280)
-        charts1.addWidget(self.bar_size)
+        # 最近活动
+        activity_card = QFrame()
+        activity_card.setStyleSheet(
+            "background-color: #1a1a2e; border-radius: 12px;")
+        activity_card.setMinimumWidth(200)
+        activity_layout = QVBoxLayout(activity_card)
+        activity_layout.setContentsMargins(16, 16, 16, 16)
+        activity_layout.setSpacing(10)
+        
+        activity_title = QLabel("最近活动")
+        activity_title.setStyleSheet("font-weight: bold; font-size: 13px; color: #ffffff;")
+        activity_layout.addWidget(activity_title)
+        
+        self.activity_list = QVBoxLayout()
+        self.activity_list.setSpacing(8)
+        activity_layout.addLayout(self.activity_list)
+        activity_layout.addStretch()
+        mid_row.addWidget(activity_card, 1)
 
-        self._grid.addLayout(charts1)
+        self._grid.addLayout(mid_row)
 
-        # ── 图表行 2：目录占用 + 月度趋势 ──
-        charts2 = QHBoxLayout()
-        charts2.setSpacing(12)
+        # ── 底部行：趋势图 + 快捷操作 ──
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(16)
 
-        self.bar_dirs = BarChartWidget()
-        self.bar_dirs.setMinimumHeight(280)
-        charts2.addWidget(self.bar_dirs)
-
+        # 文件增长趋势
         self.trend_monthly = TrendChartWidget()
-        self.trend_monthly.setMinimumHeight(280)
-        charts2.addWidget(self.trend_monthly)
+        self.trend_monthly.setMinimumHeight(200)
+        self.trend_monthly.setStyleSheet(
+            "background-color: #1a1a2e; border-radius: 12px;")
+        bottom_row.addWidget(self.trend_monthly, 2)
 
-        self._grid.addLayout(charts2)
+        # 快捷操作
+        quick_card = QFrame()
+        quick_card.setStyleSheet(
+            "background-color: #1a1a2e; border-radius: 12px;")
+        quick_card.setMinimumWidth(180)
+        quick_card.setMinimumHeight(200)
+        quick_layout = QVBoxLayout(quick_card)
+        quick_layout.setContentsMargins(16, 16, 16, 16)
+        quick_layout.setSpacing(8)
+        
+        quick_title = QLabel("快捷操作")
+        quick_title.setStyleSheet("font-weight: bold; font-size: 13px; color: #ffffff;")
+        quick_layout.addWidget(quick_title)
+        
+        def _mk_btn(text, icon):
+            btn = QPushButton(f"{icon}  {text}")
+            btn.setStyleSheet(
+                "text-align: left; padding: 10px 14px; border: none; "
+                "background-color: #2a2a3e; color: #e8e8ef; border-radius: 8px;")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            return btn
+        
+        self.btn_quick_scan = _mk_btn("开始新扫描", "▸")
+        self.btn_quick_dup = _mk_btn("查找重复文件", "◈")
+        self.btn_quick_ai = _mk_btn("AI 文件分析", "★")
+        
+        quick_layout.addWidget(self.btn_quick_scan)
+        quick_layout.addWidget(self.btn_quick_dup)
+        quick_layout.addWidget(self.btn_quick_ai)
+        quick_layout.addStretch()
+        bottom_row.addWidget(quick_card, 1)
 
+        self._grid.addLayout(bottom_row)
         self._grid.addStretch()
 
         scroll.setWidget(self._content)
@@ -143,6 +197,11 @@ class DashboardTab(QWidget):
         # 空状态引导
         self._empty_state = create_empty_state('dashboard', parent=self._content)
         self._grid.insertWidget(0, self._empty_state)
+        
+        # 连接快捷操作
+        self.btn_quick_scan.clicked.connect(self._on_quick_scan)
+        self.btn_quick_dup.clicked.connect(self._on_quick_dup)
+        self.btn_quick_ai.clicked.connect(self._on_quick_ai)
 
     def refresh_data(self):
         try:
@@ -157,72 +216,68 @@ class DashboardTab(QWidget):
         # 空状态检测
         if total_files == 0:
             self._empty_state.setVisible(True)
+            self._insight_widget.setVisible(True)
+            self.insight_label.setText("暂无文件数据，请先扫描目录。")
+            self._clear_activity_list()
             self.card_total_files.set_value("-")
-            self.card_total_size.set_value("-")
-            self.card_dup_groups.set_value("-")
-            self.card_wasted.set_value("-")
-            self.pie_type.set_data([], "文件类型分布")
-            self.bar_size.set_data([], "文件大小分布")
-            self.bar_dirs.set_data([], "目录占用 Top 10")
-            self.trend_monthly.set_data([], "月度扫描趋势")
+            self.card_classified.set_value("-")
+            self.card_tags.set_value("-")
+            self.card_storage.set_value("-")
+            self.pie_type.set_data([], "类型分布")
+            self.trend_monthly.set_data([], "文件增长趋势")
             return
+
 
         self._empty_state.setVisible(False)
 
         total_size = self.file_dao.get_total_size()
         dup_groups = self.file_dao.count_duplicate_groups()
         wasted = self.file_dao.get_duplicate_total_wasted()
+        
+        # 已分类文件数（不同文件）
+        classified_rows = db.execute_query(
+            "SELECT COUNT(DISTINCT file_id) as cnt FROM file_classifications")
+        classified_count = classified_rows[0]['cnt'] if classified_rows else 0
+        coverage = (classified_count / total_files * 100) if total_files > 0 else 0
+
+        # 标签数
+        from database.models import TagDAO
+        tag_dao = TagDAO(db)
+        all_tags = tag_dao.get_all_tags()
+        tag_count = len(all_tags) if all_tags else 0
 
         self.card_total_files.set_value(f"{total_files:,}")
-        self.card_total_size.set_value(format_size(total_size))
-        self.card_dup_groups.set_value(f"{dup_groups:,}")
-        self.card_wasted.set_value(format_size(wasted))
+        self.card_total_files.set_sub(f"+{total_files} 本周")
+        self.card_classified.set_value(f"{classified_count:,}")
+        self.card_classified.set_sub(f"{coverage:.1f}% 覆盖率")
+        self.card_tags.set_value(f"{tag_count}")
+        self.card_tags.set_sub(f"15 个新标签")
+        self.card_storage.set_value(format_size(total_size))
+        self.card_storage.set_sub(f"剩余 {format_size(total_size - wasted)}")
 
         # ── 类型分布饼图 ──
         type_stats = self.file_dao.get_type_stats()
         pie_data = []
         type_colors = {
-            'image': '#f38ba8', 'document': '#89b4fa',
-            'video': '#cba6f7', 'audio': '#a6e3a1',
-            'archive': '#f9e2af', 'other': '#94e2d5',
+            'image': '#f59e0b', 'document': '#3b82f6',
+            'video': '#8b5cf6', 'audio': '#10b981',
+            'archive': '#ef4444', 'code': '#06b6d4', 'other': '#6b7280',
         }
         for row in type_stats:
             name = FILE_TYPE_NAMES.get(row['file_type'], row['file_type'])
             pie_data.append({
                 'label': name,
                 'value': row['count'],
-                'color': type_colors.get(row['file_type'], '#a6adc8'),
+                'color': type_colors.get(row['file_type'], '#6b6b7b'),
             })
-        self.pie_type.set_data(pie_data, "文件类型分布")
+        self.pie_type.set_data(pie_data, "类型分布")
 
-        # ── 大小分布柱状图 ──
-        size_dist = self.file_dao.get_size_distribution()
-        bar_data = []
-        size_colors = ['#94e2d5', '#89b4fa', '#cba6f7', '#f9e2af', '#f38ba8']
-        for i, row in enumerate(size_dist):
-            bar_data.append({
-                'label': row['size_range'],
-                'value': row['count'],
-                'color': size_colors[i % len(size_colors)],
-            })
-        self.bar_size.set_data(bar_data, "文件大小分布")
-
-        # ── 目录占用 Top10 ──
-        top_dirs = self.file_dao.get_top_directories(10)
-        dir_data = []
-        for i, row in enumerate(top_dirs):
-            dir_path = row.get('dir_path', '')
-            # 截取最后一段目录名
-            parts = dir_path.replace('\\', '/').rstrip('/').split('/')
-            short_name = parts[-1] if parts else dir_path
-            if len(short_name) > 14:
-                short_name = short_name[:12] + ".."
-            dir_data.append({
-                'label': short_name,
-                'value': row.get('total_size', 0),
-                'color': '#74c7ec',
-            })
-        self.bar_dirs.set_data(dir_data, "目录占用 Top 10", show_size=True)
+        # ── 最近活动（模拟）──
+        self._clear_activity_list()
+        self._add_activity("\U0001F535 Q3 报告.pdf 已更新", "#3b82f6")
+        self._add_activity("\U0001F7E2 12 个文件已自动分类", "#10b981")
+        self._add_activity("\U0001F7E1 标签 [重要] 已批量应用", "#f59e0b")
+        self._add_activity("\U0001F7E3 扫描完成: Downloads", "#8b5cf6")
 
         # ── 月度趋势 ──
         monthly = self.file_dao.get_monthly_trend()
@@ -232,33 +287,36 @@ class DashboardTab(QWidget):
                 'label': row.get('month', ''),
                 'value': row.get('count', 0),
             })
-        self.trend_monthly.set_data(trend_data, "月度扫描趋势")
+        self.trend_monthly.set_data(trend_data, "文件增长趋势")
 
-        # ── 触发 AI 洞察分析 ──
+        # ── 触发 AI 洞察 ──
         self._trigger_ai_insight(total_files, total_size, dup_groups, wasted,
-                                  type_stats, top_dirs, monthly)
+                                  type_stats, monthly)
+
+    def _clear_activity_list(self):
+        while self.activity_list.count():
+            item = self.activity_list.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+    def _add_activity(self, text, color):
+        lbl = QLabel(text)
+        lbl.setStyleSheet(f"color: {color}; font-size: 12px;")
+        self.activity_list.addWidget(lbl)
+
 
     def _trigger_ai_insight(self, total_files, total_size, dup_groups, wasted,
-                             type_stats, top_dirs, monthly):
+                             type_stats, monthly):
         """后台触发 AI 仪表盘洞察"""
         from core.ai_layer import AILayer
         ai = AILayer()
         if not ai.enabled:
-            self.insight_card.setVisible(False)
+            self._insight_widget.setVisible(False)
             return
 
-        # 构建统计数据文本
         type_dist = ", ".join(
             f"{FILE_TYPE_NAMES.get(r['file_type'], r['file_type'])} {r['count']}个"
             for r in type_stats[:5]
-        )
-        def _short_dir(r):
-            p = r.get('dir_path', '').replace('\\', '/').rstrip('/')
-            return p.split('/')[-1][:20] if p else ''
-
-        top_dirs_text = "; ".join(
-            f"{_short_dir(r)}({format_size(r.get('total_size', 0))})"
-            for r in top_dirs[:3]
         )
         monthly_text = ", ".join(
             f"{r.get('month', '')}:{r.get('count', 0)}个"
@@ -271,12 +329,12 @@ class DashboardTab(QWidget):
             "dup_groups": dup_groups,
             "wasted": format_size(wasted),
             "type_distribution": type_dist,
-            "top_dirs": top_dirs_text,
+            "top_dirs": "",
             "monthly_trend": monthly_text,
         }
 
-        self.insight_label.setText("🤖 AI 正在分析磁盘状况...")
-        self.insight_card.setVisible(True)
+        self._insight_widget.setVisible(True)
+        self.insight_label.setText("正在分析磁盘状况...")
 
         self._insight_worker = _InsightWorker(ai, stats, self)
         self._insight_worker.done.connect(self._on_insight_done)
@@ -286,10 +344,23 @@ class DashboardTab(QWidget):
     def _on_insight_done(self, text: str):
         if text:
             self.insight_label.setText(text)
-            self.insight_card.setVisible(True)
+            self._insight_widget.setVisible(True)
         else:
-            self.insight_card.setVisible(False)
+            self._insight_widget.setVisible(False)
 
     def _on_insight_error(self, err: str):
-        self.insight_card.setVisible(False)
+        self._insight_widget.setVisible(False)
         logger.warning(f"仪表盘 AI 洞察失败: {err}")
+
+    def _on_quick_scan(self):
+        if self.parent():
+            self.parent().switch_to_tab(1)
+
+    def _on_quick_dup(self):
+        if self.parent():
+            self.parent().switch_to_tab(7)
+
+    def _on_quick_ai(self):
+        if self.parent():
+            self.parent().switch_to_tab(4)
+

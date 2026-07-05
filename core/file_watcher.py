@@ -3,7 +3,7 @@
 """
 import os
 from typing import Optional
-from PyQt6.QtCore import QObject, pyqtSignal, QTimer, Qt, QMetaObject, Q_ARG
+from PyQt6.QtCore import QObject, pyqtSignal, QTimer, Qt, QMetaObject
 
 from utils.logger import logger
 

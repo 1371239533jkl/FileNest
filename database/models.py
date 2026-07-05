@@ -1,7 +1,9 @@
 """
 数据访问对象 - 封装各表CRUD操作
+ponytail: 全部 %s→? 参数占位符、MySQL 特有语法翻译为 SQLite、FTS5 全文搜索集成。
 """
 from datetime import datetime
+from collections import defaultdict
 from typing import Optional, Any
 
 
@@ -16,16 +18,16 @@ class FileDAO:
         sql = """INSERT INTO files
             (file_path, file_name, original_name, file_extension, file_type,
              file_size, file_hash, create_time, modify_time, scan_time, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE
-            file_name=VALUES(file_name),
-            original_name=VALUES(original_name),
-            file_extension=VALUES(file_extension),
-            file_type=VALUES(file_type),
-            file_size=VALUES(file_size),
-            file_hash=COALESCE(VALUES(file_hash), file_hash),
-            modify_time=VALUES(modify_time),
-            scan_time=VALUES(scan_time),
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(file_path) DO UPDATE SET
+            file_name=excluded.file_name,
+            original_name=excluded.original_name,
+            file_extension=excluded.file_extension,
+            file_type=excluded.file_type,
+            file_size=excluded.file_size,
+            file_hash=COALESCE(excluded.file_hash, file_hash),
+            modify_time=excluded.modify_time,
+            scan_time=excluded.scan_time,
             status='active'"""
         return self.db.execute_insert(sql, (
             file_info['file_path'], file_info['file_name'],
@@ -35,141 +37,128 @@ class FileDAO:
             file_info.get('modify_time'), datetime.now(), 'active'
         ))
 
-    def insert_many(self, file_infos: list) -> int:
-        """批量插入或更新。如果 file_path 已存在，则更新并重新激活为 active。"""
-        sql = """INSERT INTO files
-            (file_path, file_name, original_name, file_extension, file_type,
-             file_size, file_hash, create_time, modify_time, scan_time, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE
-            file_name=VALUES(file_name),
-            original_name=VALUES(original_name),
-            file_extension=VALUES(file_extension),
-            file_type=VALUES(file_type),
-            file_size=VALUES(file_size),
-            file_hash=COALESCE(VALUES(file_hash), file_hash),
-            modify_time=VALUES(modify_time),
-            scan_time=VALUES(scan_time),
-            status='active'"""
-        params = [(
-            fi['file_path'], fi['file_name'], fi.get('original_name'),
-            fi['file_extension'], fi['file_type'], fi['file_size'],
-            fi.get('file_hash'), fi.get('create_time'), fi.get('modify_time'),
-            datetime.now(), 'active'
-        ) for fi in file_infos]
-        return self.db.execute_many(sql, params)
-
     def get_by_id(self, file_id: int) -> Optional[dict]:
-        return self.db.execute_one("SELECT * FROM files WHERE id = %s", (file_id,))
+        return self.db.execute_one("SELECT * FROM files WHERE id = ?", (file_id,))
 
     def get_by_path(self, file_path: str) -> Optional[dict]:
-        return self.db.execute_one("SELECT * FROM files WHERE file_path = %s AND status = 'active'", (file_path,))
+        return self.db.execute_one(
+            "SELECT * FROM files WHERE file_path = ? AND status = 'active'", (file_path,))
 
     def get_by_hash(self, file_hash: str) -> list:
         return self.db.execute_query(
-            "SELECT * FROM files WHERE file_hash = %s AND status = 'active'", (file_hash,))
+            "SELECT * FROM files WHERE file_hash = ? AND status = 'active'", (file_hash,))
 
     def get_by_directory(self, directory: str) -> list:
         return self.db.execute_query(
-            "SELECT * FROM files WHERE file_path LIKE %s AND status = 'active'",
+            "SELECT * FROM files WHERE file_path LIKE ? AND status = 'active'",
             (directory.rstrip('/\\') + '%',))
 
     def get_all_active(self) -> list:
-        return self.db.execute_query("SELECT * FROM files WHERE status = 'active' ORDER BY scan_time DESC")
+        return self.db.execute_query(
+            "SELECT * FROM files WHERE status = 'active' ORDER BY scan_time DESC")
 
     def get_all_active_paginated(self, page: int = 0, page_size: int = 500) -> list:
-        """分页获取活动文件，默认每页 500 条，page 从 0 开始"""
         offset = page * page_size
-        sql = "SELECT * FROM files WHERE status = 'active' ORDER BY scan_time DESC LIMIT %s OFFSET %s"
+        sql = "SELECT * FROM files WHERE status = 'active' ORDER BY scan_time DESC LIMIT ? OFFSET ?"
         return self.db.execute_query(sql, (page_size, offset))
 
     def update_name(self, file_id: int, new_name: str, new_path: str) -> int:
-        sql = "UPDATE files SET file_name = %s, file_path = %s WHERE id = %s"
+        sql = "UPDATE files SET file_name = ?, file_path = ? WHERE id = ?"
         return self.db.execute_update(sql, (new_name, new_path, file_id))
 
     def update_hash(self, file_id: int, file_hash: str) -> int:
         return self.db.execute_update(
-            "UPDATE files SET file_hash = %s WHERE id = %s", (file_hash, file_id))
+            "UPDATE files SET file_hash = ? WHERE id = ?", (file_hash, file_id))
 
     def update_duplicate(self, file_id: int, is_duplicate: int, group_id: int) -> int:
         return self.db.execute_update(
-            "UPDATE files SET is_duplicate = %s, duplicate_group_id = %s WHERE id = %s",
+            "UPDATE files SET is_duplicate = ?, duplicate_group_id = ? WHERE id = ?",
             (is_duplicate, group_id, file_id))
 
     def update_status(self, file_id: int, status: str) -> int:
         return self.db.execute_update(
-            "UPDATE files SET status = %s WHERE id = %s", (status, file_id))
+            "UPDATE files SET status = ? WHERE id = ?", (status, file_id))
 
     def delete_record(self, file_id: int) -> int:
         """从数据库中彻底删除文件记录（包括关联的元数据、分类、历史记录）"""
-        # 先删除关联数据
-        self.db.execute_update("DELETE FROM file_metadata WHERE file_id = %s", (file_id,))
-        self.db.execute_update("DELETE FROM file_classifications WHERE file_id = %s", (file_id,))
-        self.db.execute_update("DELETE FROM operation_history WHERE file_id = %s", (file_id,))
-        # 再删除文件记录本身
-        return self.db.execute_update("DELETE FROM files WHERE id = %s", (file_id,))
+        self.db.execute_update("DELETE FROM file_metadata WHERE file_id = ?", (file_id,))
+        self.db.execute_update("DELETE FROM file_classifications WHERE file_id = ?", (file_id,))
+        self.db.execute_update("DELETE FROM operation_history WHERE file_id = ?", (file_id,))
+        return self.db.execute_update("DELETE FROM files WHERE id = ?", (file_id,))
 
     def _build_search_conditions(self, name=None, file_type=None, extension=None,
                                   min_size=None, max_size=None, start_date=None,
                                   end_date=None, is_duplicate=None):
-        """构建搜索条件（供 search/search_paginated/search_count 复用）"""
-        conditions = ["status = 'active'"]
+        """构建搜索条件（供 search/search_paginated/search_count 复用）。
+        返回 (where_clause, params, use_fts) — use_fts 表示是否需要 JOIN files_fts。"""
+        conditions = ["f.status = 'active'"]
         params = []
+        use_fts = False
+
         if name:
-            conditions.append("file_name LIKE %s")
-            params.append(f"%{name}%")
+            use_fts = True
+            conditions.append("files_fts MATCH ?")
+            params.append(f"{name}*")
         if file_type:
-            conditions.append("file_type = %s")
+            conditions.append("f.file_type = ?")
             params.append(file_type)
         if extension:
-            conditions.append("file_extension = %s")
+            conditions.append("f.file_extension = ?")
             params.append(extension)
         if min_size is not None:
-            conditions.append("file_size >= %s")
+            conditions.append("f.file_size >= ?")
             params.append(min_size)
         if max_size is not None:
-            conditions.append("file_size <= %s")
+            conditions.append("f.file_size <= ?")
             params.append(max_size)
         if start_date:
-            conditions.append("modify_time >= %s")
+            conditions.append("f.modify_time >= ?")
             params.append(start_date)
         if end_date:
-            conditions.append("modify_time <= %s")
+            conditions.append("f.modify_time <= ?")
             params.append(end_date)
         if is_duplicate is not None:
-            conditions.append("is_duplicate = %s")
+            conditions.append("f.is_duplicate = ?")
             params.append(is_duplicate)
-        return " AND ".join(conditions), params
+        return " AND ".join(conditions), params, use_fts
 
     def search(self, name: Optional[str] = None, file_type: Optional[str] = None,
                extension: Optional[str] = None, min_size: Optional[int] = None,
                max_size: Optional[int] = None, start_date: Optional[str] = None,
                end_date: Optional[str] = None,
                is_duplicate: Optional[int] = None) -> list:
-        where, params = self._build_search_conditions(
+        where, params, use_fts = self._build_search_conditions(
             name, file_type, extension, min_size, max_size, start_date, end_date, is_duplicate)
-        sql = f"SELECT * FROM files WHERE {where} ORDER BY modify_time DESC"
+        if use_fts:
+            sql = f"SELECT f.* FROM files f JOIN files_fts ft ON f.id = ft.rowid WHERE {where} ORDER BY rank"
+        else:
+            sql = f"SELECT f.* FROM files f WHERE {where} ORDER BY f.modify_time DESC"
         return self.db.execute_query(sql, tuple(params))
 
     def search_paginated(self, page: int = 0, page_size: int = 100,
                          name=None, file_type=None, extension=None,
                          min_size=None, max_size=None, start_date=None,
                          end_date=None, is_duplicate=None) -> list:
-        """分页搜索，返回当前页结果"""
-        where, params = self._build_search_conditions(
+        where, params, use_fts = self._build_search_conditions(
             name, file_type, extension, min_size, max_size, start_date, end_date, is_duplicate)
         offset = page * page_size
-        sql = f"SELECT * FROM files WHERE {where} ORDER BY modify_time DESC LIMIT %s OFFSET %s"
-        params.extend([page_size, offset])
+        if use_fts:
+            sql = f"SELECT f.* FROM files f JOIN files_fts ft ON f.id = ft.rowid WHERE {where} ORDER BY rank LIMIT ? OFFSET ?"
+        else:
+            sql = f"SELECT f.* FROM files f WHERE {where} ORDER BY f.modify_time DESC LIMIT ? OFFSET ?"
+        params.append(page_size)
+        params.append(offset)
         return self.db.execute_query(sql, tuple(params))
 
     def search_count(self, name=None, file_type=None, extension=None,
                      min_size=None, max_size=None, start_date=None,
                      end_date=None, is_duplicate=None) -> int:
-        """搜索总数（用于分页计算）"""
-        where, params = self._build_search_conditions(
+        where, params, use_fts = self._build_search_conditions(
             name, file_type, extension, min_size, max_size, start_date, end_date, is_duplicate)
-        sql = f"SELECT COUNT(*) as total FROM files WHERE {where}"
+        if use_fts:
+            sql = f"SELECT COUNT(*) as total FROM files f JOIN files_fts ft ON f.id = ft.rowid WHERE {where}"
+        else:
+            sql = f"SELECT COUNT(*) as total FROM files f WHERE {where}"
         row = self.db.execute_one(sql, tuple(params))
         return row['total'] if row else 0
 
@@ -180,7 +169,6 @@ class FileDAO:
         return self.db.execute_query(sql)
 
     def get_all_duplicates(self) -> list:
-        """单条SQL查出所有重复文件的完整记录（替代 get_duplicates + 逐个 get_by_hash）"""
         sql = """SELECT f.* FROM files f
                  INNER JOIN (
                      SELECT file_hash FROM files
@@ -198,40 +186,35 @@ class FileDAO:
         return self.db.execute_query(sql)
 
     def get_deleted_files(self, page: int = 0, page_size: int = 100) -> list:
-        """获取已删除文件（供回收区管理页面使用）"""
         offset = page * page_size
         sql = """SELECT * FROM files WHERE status = 'deleted'
-                 ORDER BY scan_time DESC LIMIT %s OFFSET %s"""
+                 ORDER BY scan_time DESC LIMIT ? OFFSET ?"""
         return self.db.execute_query(sql, (page_size, offset))
 
     def count_deleted(self) -> int:
-        """已删除文件总数"""
         row = self.db.execute_one(
             "SELECT COUNT(*) as total FROM files WHERE status = 'deleted'")
         return row['total'] if row else 0
 
     def count_active(self) -> int:
-        """活跃文件总数"""
         row = self.db.execute_one(
             "SELECT COUNT(*) as total FROM files WHERE status = 'active'")
         return row['total'] if row else 0
 
     def get_classification_paginated(self, cls_type: str, cls_value: str,
                                      page: int = 0, page_size: int = 100) -> list:
-        """分页获取分类文件"""
         offset = page * page_size
         sql = """SELECT f.* FROM files f
                  JOIN file_classifications c ON f.id = c.file_id
-                 WHERE c.classification_type = %s AND c.classification_value = %s
+                 WHERE c.classification_type = ? AND c.classification_value = ?
                  AND f.status = 'active'
-                 ORDER BY f.scan_time DESC LIMIT %s OFFSET %s"""
+                 ORDER BY f.scan_time DESC LIMIT ? OFFSET ?"""
         return self.db.execute_query(sql, (cls_type, cls_value, page_size, offset))
 
     def count_by_classification(self, cls_type: str, cls_value: str) -> int:
-        """分类下文件总数"""
         sql = """SELECT COUNT(*) as total FROM files f
                  JOIN file_classifications c ON f.id = c.file_id
-                 WHERE c.classification_type = %s AND c.classification_value = %s
+                 WHERE c.classification_type = ? AND c.classification_value = ?
                  AND f.status = 'active'"""
         row = self.db.execute_one(sql, (cls_type, cls_value))
         return row['total'] if row else 0
@@ -239,13 +222,11 @@ class FileDAO:
     # ── 磁盘分析 DAO ──
 
     def get_total_size(self) -> int:
-        """所有活跃文件总大小"""
         row = self.db.execute_one(
             "SELECT COALESCE(SUM(file_size), 0) as total FROM files WHERE status = 'active'")
         return row['total'] if row else 0
 
     def get_size_distribution(self) -> list:
-        """文件大小分布：返回 [range_label, count]"""
         sql = """SELECT
             CASE
                 WHEN file_size < 1024 THEN '0-1KB'
@@ -257,24 +238,34 @@ class FileDAO:
             COUNT(*) as count
             FROM files WHERE status = 'active'
             GROUP BY size_range
-            ORDER BY FIELD(size_range, '0-1KB', '1KB-1MB', '1MB-100MB', '100MB-1GB', '>1GB')"""
+            ORDER BY CASE size_range
+                WHEN '0-1KB' THEN 1
+                WHEN '1KB-1MB' THEN 2
+                WHEN '1MB-100MB' THEN 3
+                WHEN '100MB-1GB' THEN 4
+                ELSE 5
+            END"""
         return self.db.execute_query(sql)
 
     def get_top_directories(self, limit: int = 10) -> list:
-        """按目录统计文件总大小（取 Top N）"""
-        sql = """SELECT
-            SUBSTRING_INDEX(file_path, '/', 4) as dir_path,
-            COUNT(*) as file_count,
-            SUM(file_size) as total_size
-            FROM files WHERE status = 'active'
-            GROUP BY dir_path
-            ORDER BY total_size DESC LIMIT %s"""
-        return self.db.execute_query(sql, (limit,))
+        """按目录统计文件总大小（取 Top N）。
+        ponytail: SQLite 无 SUBSTRING_INDEX，改为 Python 端路径切分聚合。"""
+        rows = self.db.execute_query(
+            "SELECT file_path, file_size FROM files WHERE status = 'active'")
+        dir_stats = defaultdict(lambda: {'count': 0, 'total_size': 0})
+        for row in rows:
+            parts = row['file_path'].replace('\\', '/').split('/')
+            dir_path = '/'.join(parts[:4])
+            dir_stats[dir_path]['count'] += 1
+            dir_stats[dir_path]['total_size'] += (row['file_size'] or 0)
+        result = sorted(
+            dir_stats.items(), key=lambda x: x[1]['total_size'], reverse=True)[:limit]
+        return [{'dir_path': k, 'file_count': v['count'], 'total_size': v['total_size']}
+                for k, v in result]
 
     def get_monthly_trend(self) -> list:
-        """按月统计扫描文件数和总大小"""
         sql = """SELECT
-            DATE_FORMAT(scan_time, '%Y-%m') as month,
+            strftime('%Y-%m', scan_time) as month,
             COUNT(*) as count,
             SUM(file_size) as total_size
             FROM files WHERE status = 'active'
@@ -284,7 +275,6 @@ class FileDAO:
     # ── 重复文件 DAO ──
 
     def count_duplicate_groups(self) -> int:
-        """重复组数"""
         row = self.db.execute_one(
             """SELECT COUNT(*) as total FROM (
                 SELECT file_hash FROM files
@@ -294,7 +284,6 @@ class FileDAO:
         return row['total'] if row else 0
 
     def get_duplicate_groups_paginated(self, page: int = 0, page_size: int = 50) -> list:
-        """分页获取重复组摘要（hash、数量、单文件大小、浪费空间）"""
         offset = page * page_size
         sql = """SELECT file_hash,
             COUNT(*) as file_count,
@@ -304,19 +293,17 @@ class FileDAO:
             WHERE file_hash IS NOT NULL AND status = 'active'
             GROUP BY file_hash HAVING file_count > 1
             ORDER BY wasted_size DESC
-            LIMIT %s OFFSET %s"""
+            LIMIT ? OFFSET ?"""
         return self.db.execute_query(sql, (page_size, offset))
 
     def get_duplicate_group_files(self, file_hash: str) -> list:
-        """获取指定哈希值的所有文件"""
         return self.db.execute_query(
             """SELECT * FROM files
-               WHERE file_hash = %s AND status = 'active'
+               WHERE file_hash = ? AND status = 'active'
                ORDER BY modify_time DESC""",
             (file_hash,))
 
     def get_duplicate_total_wasted(self) -> int:
-        """重复文件总浪费空间"""
         row = self.db.execute_one(
             """SELECT COALESCE(SUM(wasted), 0) as total FROM (
                 SELECT (COUNT(*) - 1) * MIN(file_size) as wasted
@@ -328,7 +315,7 @@ class FileDAO:
 
     def delete_by_path(self, file_path: str) -> int:
         return self.db.execute_update(
-            "UPDATE files SET status = 'deleted' WHERE file_path = %s", (file_path,))
+            "UPDATE files SET status = 'deleted' WHERE file_path = ?", (file_path,))
 
 
 class MetadataDAO:
@@ -342,14 +329,14 @@ class MetadataDAO:
             (file_id, width, height, photo_taken_time, camera_model,
              gps_latitude, gps_longitude, pdf_title, pdf_author, pdf_pages,
              video_duration, video_resolution, extra_data)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE
-             width=VALUES(width), height=VALUES(height),
-             photo_taken_time=VALUES(photo_taken_time), camera_model=VALUES(camera_model),
-             gps_latitude=VALUES(gps_latitude), gps_longitude=VALUES(gps_longitude),
-             pdf_title=VALUES(pdf_title), pdf_author=VALUES(pdf_author),
-             pdf_pages=VALUES(pdf_pages), video_duration=VALUES(video_duration),
-             video_resolution=VALUES(video_resolution), extra_data=VALUES(extra_data)"""
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(file_id) DO UPDATE SET
+             width=excluded.width, height=excluded.height,
+             photo_taken_time=excluded.photo_taken_time, camera_model=excluded.camera_model,
+             gps_latitude=excluded.gps_latitude, gps_longitude=excluded.gps_longitude,
+             pdf_title=excluded.pdf_title, pdf_author=excluded.pdf_author,
+             pdf_pages=excluded.pdf_pages, video_duration=excluded.video_duration,
+             video_resolution=excluded.video_resolution, extra_data=excluded.extra_data"""
         return self.db.execute_insert(sql, (
             file_id,
             metadata.get('width'), metadata.get('height'),
@@ -362,7 +349,7 @@ class MetadataDAO:
 
     def get_by_file_id(self, file_id: int) -> Optional[dict]:
         return self.db.execute_one(
-            "SELECT * FROM file_metadata WHERE file_id = %s", (file_id,))
+            "SELECT * FROM file_metadata WHERE file_id = ?", (file_id,))
 
 
 class ClassificationDAO:
@@ -375,7 +362,7 @@ class ClassificationDAO:
                confidence: float = 1.0) -> int:
         sql = """INSERT INTO file_classifications
             (file_id, classification_type, classification_value, classification_time, confidence_score)
-            VALUES (%s, %s, %s, %s, %s)"""
+            VALUES (?, ?, ?, ?, ?)"""
         return self.db.execute_insert(sql, (
             file_id, cls_type, cls_value, datetime.now(), confidence))
 
@@ -386,20 +373,18 @@ class ClassificationDAO:
         now = datetime.now()
         sql = """INSERT INTO file_classifications
             (file_id, classification_type, classification_value, classification_time, confidence_score)
-            VALUES (%s, %s, %s, %s, %s)"""
+            VALUES (?, ?, ?, ?, ?)"""
         params = [(fid, ctype, cval, now, conf) for fid, ctype, cval, conf in cls_records]
         return self.db.execute_many(sql, params)
 
     def get_by_file_id(self, file_id: int) -> list:
         return self.db.execute_query(
-            "SELECT * FROM file_classifications WHERE file_id = %s", (file_id,))
+            "SELECT * FROM file_classifications WHERE file_id = ?", (file_id,))
 
     def get_by_file_ids(self, file_ids: list) -> dict:
-        """批量查询多个文件的分类，返回 {file_id: [classification_value, ...]}"""
         if not file_ids:
             return {}
-        placeholders = ','.join(['%s'] * len(file_ids))
-        # 使用 DISTINCT 去重，避免同一个分类值重复显示
+        placeholders = ','.join(['?'] * len(file_ids))
         rows = self.db.execute_query(
             f"SELECT DISTINCT file_id, classification_value FROM file_classifications "
             f"WHERE file_id IN ({placeholders}) ORDER BY classification_value",
@@ -411,13 +396,13 @@ class ClassificationDAO:
 
     def get_by_type(self, cls_type: str) -> list:
         return self.db.execute_query(
-            "SELECT * FROM file_classifications WHERE classification_type = %s",
+            "SELECT * FROM file_classifications WHERE classification_type = ?",
             (cls_type,))
 
     def get_distinct_values(self, cls_type: Optional[str] = None) -> list:
         if cls_type:
             sql = """SELECT DISTINCT classification_value, COUNT(*) as cnt
-                     FROM file_classifications WHERE classification_type = %s
+                     FROM file_classifications WHERE classification_type = ?
                      GROUP BY classification_value ORDER BY cnt DESC"""
             return self.db.execute_query(sql, (cls_type,))
         sql = """SELECT classification_type, classification_value, COUNT(*) as cnt
@@ -427,7 +412,7 @@ class ClassificationDAO:
 
     def delete_by_file_id(self, file_id: int) -> int:
         return self.db.execute_update(
-            "DELETE FROM file_classifications WHERE file_id = %s", (file_id,))
+            "DELETE FROM file_classifications WHERE file_id = ?", (file_id,))
 
 
 class OperationHistoryDAO:
@@ -443,7 +428,7 @@ class OperationHistoryDAO:
         sql = """INSERT INTO operation_history
             (operation_type, operation_time, file_id, old_value, new_value,
              operation_status, undo_available, error_message, batch_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"""
         undo = 1 if status == 'completed' and op_type in ('rename', 'move', 'delete', 'classify') else 0
         return self.db.execute_insert(sql, (
             op_type, datetime.now(), file_id, old_value, new_value,
@@ -452,29 +437,29 @@ class OperationHistoryDAO:
 
     def get_by_id(self, op_id: int) -> Optional[dict]:
         return self.db.execute_one(
-            "SELECT * FROM operation_history WHERE id = %s", (op_id,))
+            "SELECT * FROM operation_history WHERE id = ?", (op_id,))
 
     def get_recent(self, limit: int = 100, op_type: Optional[str] = None) -> list:
         if op_type:
-            sql = """SELECT * FROM operation_history WHERE operation_type = %s
-                     ORDER BY operation_time DESC LIMIT %s"""
+            sql = """SELECT * FROM operation_history WHERE operation_type = ?
+                     ORDER BY operation_time DESC LIMIT ?"""
             return self.db.execute_query(sql, (op_type, limit))
-        sql = "SELECT * FROM operation_history ORDER BY operation_time DESC LIMIT %s"
+        sql = "SELECT * FROM operation_history ORDER BY operation_time DESC LIMIT ?"
         return self.db.execute_query(sql, (limit,))
 
     def get_by_batch(self, batch_id: str) -> list:
         return self.db.execute_query(
-            "SELECT * FROM operation_history WHERE batch_id = %s ORDER BY id", (batch_id,))
+            "SELECT * FROM operation_history WHERE batch_id = ? ORDER BY id", (batch_id,))
 
     def get_undoable(self, limit: int = 100) -> list:
         sql = """SELECT * FROM operation_history
                  WHERE undo_available = 1 AND operation_status = 'completed'
-                 ORDER BY operation_time DESC LIMIT %s"""
+                 ORDER BY operation_time DESC LIMIT ?"""
         return self.db.execute_query(sql, (limit,))
 
     def mark_undone(self, op_id: int) -> int:
         return self.db.execute_update(
-            "UPDATE operation_history SET operation_status = 'undone', undo_available = 0 WHERE id = %s",
+            "UPDATE operation_history SET operation_status = 'undone', undo_available = 0 WHERE id = ?",
             (op_id,))
 
     def search(self, op_type: Optional[str] = None, start_date: Optional[str] = None,
@@ -483,27 +468,26 @@ class OperationHistoryDAO:
         conditions = []
         params = []
         if op_type:
-            conditions.append("operation_type = %s")
+            conditions.append("operation_type = ?")
             params.append(op_type)
         if start_date:
-            conditions.append("operation_time >= %s")
+            conditions.append("operation_time >= ?")
             params.append(start_date)
         if end_date:
-            conditions.append("operation_time <= %s")
+            conditions.append("operation_time <= ?")
             params.append(end_date)
         if batch_id:
-            conditions.append("batch_id = %s")
+            conditions.append("batch_id = ?")
             params.append(batch_id)
 
         where = " AND ".join(conditions) if conditions else "1=1"
-        sql = f"SELECT * FROM operation_history WHERE {where} ORDER BY operation_time DESC LIMIT %s"
+        sql = f"SELECT * FROM operation_history WHERE {where} ORDER BY operation_time DESC LIMIT ?"
         params.append(limit)
         return self.db.execute_query(sql, tuple(params))
 
     def get_latest_delete(self, file_id: int) -> Optional[dict]:
-        """查找指定文件最近一次删除/去重操作记录（用于回收区恢复）"""
         sql = """SELECT * FROM operation_history
-                 WHERE file_id = %s AND operation_type IN ('delete', 'dedup')
+                 WHERE file_id = ? AND operation_type IN ('delete', 'dedup')
                  ORDER BY operation_time DESC LIMIT 1"""
         return self.db.execute_one(sql, (file_id,))
 
@@ -517,7 +501,7 @@ class ScanDirectoryDAO:
     def insert(self, directory_path: str, recursive: bool = True) -> int:
         sql = """INSERT INTO scan_directories
             (directory_path, is_active, scan_recursive, create_time)
-            VALUES (%s, 1, %s, %s)"""
+            VALUES (?, 1, ?, ?)"""
         return self.db.execute_insert(sql, (directory_path, int(recursive), datetime.now()))
 
     def get_all(self) -> list:
@@ -529,19 +513,19 @@ class ScanDirectoryDAO:
 
     def update_scan_time(self, dir_id: int, file_count: int) -> int:
         return self.db.execute_update(
-            "UPDATE scan_directories SET last_scan_time = %s, file_count = %s WHERE id = %s",
+            "UPDATE scan_directories SET last_scan_time = ?, file_count = ? WHERE id = ?",
             (datetime.now(), file_count, dir_id))
 
     def toggle_active(self, dir_id: int, active: bool) -> int:
         return self.db.execute_update(
-            "UPDATE scan_directories SET is_active = %s WHERE id = %s", (int(active), dir_id))
+            "UPDATE scan_directories SET is_active = ? WHERE id = ?", (int(active), dir_id))
 
     def delete(self, dir_id: int) -> int:
-        return self.db.execute_update("DELETE FROM scan_directories WHERE id = %s", (dir_id,))
+        return self.db.execute_update("DELETE FROM scan_directories WHERE id = ?", (dir_id,))
 
     def exists(self, directory_path: str) -> bool:
         row = self.db.execute_one(
-            "SELECT id FROM scan_directories WHERE directory_path = %s", (directory_path,))
+            "SELECT id FROM scan_directories WHERE directory_path = ?", (directory_path,))
         return row is not None
 
 
@@ -555,7 +539,7 @@ class ClassificationRuleDAO:
                target_category: str, priority: int = 0) -> int:
         sql = """INSERT INTO classification_rules
             (rule_name, rule_type, rule_pattern, target_category, priority, is_enabled, create_time)
-            VALUES (%s, %s, %s, %s, %s, 1, %s)"""
+            VALUES (?, ?, ?, ?, ?, 1, ?)"""
         return self.db.execute_insert(sql, (
             rule_name, rule_type, rule_pattern, target_category, priority, datetime.now()))
 
@@ -570,18 +554,18 @@ class ClassificationRuleDAO:
     def update(self, rule_id: int, rule_name: str, rule_type: str,
                rule_pattern: str, target_category: str, priority: int) -> int:
         sql = """UPDATE classification_rules SET
-            rule_name=%s, rule_type=%s, rule_pattern=%s,
-            target_category=%s, priority=%s WHERE id=%s"""
+            rule_name=?, rule_type=?, rule_pattern=?,
+            target_category=?, priority=? WHERE id=?"""
         return self.db.execute_update(sql, (
             rule_name, rule_type, rule_pattern, target_category, priority, rule_id))
 
     def toggle_enabled(self, rule_id: int, enabled: bool) -> int:
         return self.db.execute_update(
-            "UPDATE classification_rules SET is_enabled = %s WHERE id = %s",
+            "UPDATE classification_rules SET is_enabled = ? WHERE id = ?",
             (int(enabled), rule_id))
 
     def delete(self, rule_id: int) -> int:
-        return self.db.execute_update("DELETE FROM classification_rules WHERE id = %s", (rule_id,))
+        return self.db.execute_update("DELETE FROM classification_rules WHERE id = ?", (rule_id,))
 
 
 class SystemSettingsDAO:
@@ -592,7 +576,7 @@ class SystemSettingsDAO:
 
     def get(self, key: str, default: Any = None) -> Any:
         row = self.db.execute_one(
-            "SELECT setting_value, setting_type FROM system_settings WHERE setting_key = %s", (key,))
+            "SELECT setting_value, setting_type FROM system_settings WHERE setting_key = ?", (key,))
         if not row:
             return default
         val = row['setting_value']
@@ -605,14 +589,13 @@ class SystemSettingsDAO:
 
     def set(self, key: str, value: Any, setting_type: str = 'string',
             description: Optional[str] = None) -> int:
-        # 使用 INSERT ... ON DUPLICATE KEY UPDATE 来安全地处理并发情况
         sql = """INSERT INTO system_settings (setting_key, setting_value, setting_type, description, update_time)
-                 VALUES (%s, %s, %s, %s, %s)
-                 ON DUPLICATE KEY UPDATE 
-                 setting_value=VALUES(setting_value), 
-                 setting_type=VALUES(setting_type), 
-                 description=VALUES(description), 
-                 update_time=VALUES(update_time)"""
+                 VALUES (?, ?, ?, ?, ?)
+                 ON CONFLICT(setting_key) DO UPDATE SET
+                 setting_value=excluded.setting_value,
+                 setting_type=excluded.setting_type,
+                 description=excluded.description,
+                 update_time=excluded.update_time"""
         now = datetime.now()
         return self.db.execute_update(sql, (
             key, str(value), setting_type, description, now))
@@ -628,64 +611,56 @@ class TagDAO:
         self.db = db
 
     def add_tag(self, file_id: int, tag_name: str) -> int:
-        """给文件添加标签，同时确保标签名在独立标签表中存在"""
         name = tag_name.strip()
-        # 确保独立标签存在
         self.db.execute_insert(
-            "INSERT IGNORE INTO tags (tag_name, create_time) VALUES (%s, %s)",
+            "INSERT OR IGNORE INTO tags (tag_name, create_time) VALUES (?, ?)",
             (name, datetime.now()))
-        # 关联文件和标签
-        sql = """INSERT IGNORE INTO file_tags (file_id, tag_name, create_time)
-                 VALUES (%s, %s, %s)"""
+        sql = """INSERT OR IGNORE INTO file_tags (file_id, tag_name, create_time)
+                 VALUES (?, ?, ?)"""
         return self.db.execute_insert(sql, (file_id, name, datetime.now()))
 
     def create_tag(self, tag_name: str) -> int:
-        """创建独立标签（不关联文件）"""
         name = tag_name.strip()
         return self.db.execute_insert(
-            "INSERT IGNORE INTO tags (tag_name, create_time) VALUES (%s, %s)",
+            "INSERT OR IGNORE INTO tags (tag_name, create_time) VALUES (?, ?)",
             (name, datetime.now()))
 
     def remove_tag(self, file_id: int, tag_name: str) -> int:
         return self.db.execute_update(
-            "DELETE FROM file_tags WHERE file_id = %s AND tag_name = %s",
+            "DELETE FROM file_tags WHERE file_id = ? AND tag_name = ?",
             (file_id, tag_name.strip()))
 
     def remove_all_tags(self, file_id: int) -> int:
         return self.db.execute_update(
-            "DELETE FROM file_tags WHERE file_id = %s", (file_id,))
+            "DELETE FROM file_tags WHERE file_id = ?", (file_id,))
 
     def get_tags_by_file(self, file_id: int) -> list:
         return self.db.execute_query(
-            "SELECT * FROM file_tags WHERE file_id = %s ORDER BY tag_name", (file_id,))
+            "SELECT * FROM file_tags WHERE file_id = ? ORDER BY tag_name", (file_id,))
 
     def get_files_by_tag(self, tag_name: str) -> list:
-        """获取打某个标签的所有文件ID"""
         return self.db.execute_query(
             "SELECT f.* FROM files f JOIN file_tags t ON f.id = t.file_id "
-            "WHERE t.tag_name = %s AND f.status = 'active' ORDER BY t.create_time DESC",
+            "WHERE t.tag_name = ? AND f.status = 'active' ORDER BY t.create_time DESC",
             (tag_name.strip(),))
 
     def get_files_by_tag_paginated(self, tag_name: str, page: int = 0, page_size: int = 100) -> list:
-        """分页获取打某个标签的文件，page 从 0 开始"""
         offset = page * page_size
         return self.db.execute_query(
             "SELECT f.* FROM files f JOIN file_tags t ON f.id = t.file_id "
-            "WHERE t.tag_name = %s AND f.status = 'active' ORDER BY t.create_time DESC "
-            "LIMIT %s OFFSET %s",
+            "WHERE t.tag_name = ? AND f.status = 'active' ORDER BY t.create_time DESC "
+            "LIMIT ? OFFSET ?",
             (tag_name.strip(), page_size, offset))
 
     def count_files_by_tag(self, tag_name: str) -> int:
-        """获取某个标签关联的活跃文件数"""
         row = self.db.execute_one(
             "SELECT COUNT(*) as total FROM file_tags t "
             "JOIN files f ON f.id = t.file_id AND f.status = 'active' "
-            "WHERE t.tag_name = %s",
+            "WHERE t.tag_name = ?",
             (tag_name.strip(),))
         return row['total'] if row else 0
 
     def get_all_tags(self) -> list:
-        """获取所有标签及其文件数（含独立标签），按文件数降序"""
         sql = """SELECT tg.tag_name,
                         COALESCE(t.cnt, 0) as file_count
                  FROM (
@@ -703,10 +678,9 @@ class TagDAO:
         return self.db.execute_query(sql)
 
     def get_all_tags_by_file(self, file_ids: list) -> dict:
-        """批量查多个文件的标签，返回 {file_id: [tag_name, ...]}"""
         if not file_ids:
             return {}
-        placeholders = ','.join(['%s'] * len(file_ids))
+        placeholders = ','.join(['?'] * len(file_ids))
         rows = self.db.execute_query(
             f"SELECT file_id, tag_name FROM file_tags WHERE file_id IN ({placeholders}) "
             f"ORDER BY tag_name", tuple(file_ids))
@@ -717,19 +691,17 @@ class TagDAO:
 
     def rename_tag(self, old_name: str, new_name: str) -> int:
         return self.db.execute_update(
-            "UPDATE file_tags SET tag_name = %s WHERE tag_name = %s",
+            "UPDATE file_tags SET tag_name = ? WHERE tag_name = ?",
             (new_name.strip(), old_name.strip()))
 
     def delete_tag(self, tag_name: str) -> int:
-        """删除标签（从 file_tags 和 tags 表中同时删除）"""
         total = self.db.execute_update(
-            "DELETE FROM file_tags WHERE tag_name = %s", (tag_name.strip(),))
+            "DELETE FROM file_tags WHERE tag_name = ?", (tag_name.strip(),))
         total += self.db.execute_update(
-            "DELETE FROM tags WHERE tag_name = %s", (tag_name.strip(),))
+            "DELETE FROM tags WHERE tag_name = ?", (tag_name.strip(),))
         return total
 
     def batch_add_tags(self, file_ids: list, tag_names: list) -> int:
-        """批量给多个文件加多个标签"""
         if not file_ids or not tag_names:
             return 0
         params = []
@@ -737,5 +709,5 @@ class TagDAO:
         for fid in file_ids:
             for tag in tag_names:
                 params.append((fid, tag.strip(), now))
-        sql = "INSERT IGNORE INTO file_tags (file_id, tag_name, create_time) VALUES (%s, %s, %s)"
+        sql = "INSERT OR IGNORE INTO file_tags (file_id, tag_name, create_time) VALUES (?, ?, ?)"
         return self.db.execute_many(sql, params)

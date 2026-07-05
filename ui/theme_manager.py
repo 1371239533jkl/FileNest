@@ -3,7 +3,6 @@
 """
 from PyQt6.QtWidgets import QWidget
 from PyQt6.QtCore import QObject
-from ui.styles import DARK_STYLE, LIGHT_STYLE
 
 
 class ThemeManager(QObject):
@@ -11,12 +10,6 @@ class ThemeManager(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-
-    def get_style(self, theme_name: str) -> str:
-        """获取指定主题的全局样式"""
-        if theme_name == "light":
-            return LIGHT_STYLE
-        return DARK_STYLE
 
     def apply_theme_to_widget(self, widget: QWidget, theme_name: str):
         """

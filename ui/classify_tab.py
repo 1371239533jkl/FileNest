@@ -20,6 +20,7 @@ from core.batch_classifier import BatchClassifyWorker
 from core.data_cache import GlobalDataCache
 from core.rule_engine import TagRecommender
 from core.ai_layer import AILayer
+from ui.ai_file_actions import show_tag_recommendation_dialog, request_ai_describe_file
 from database.db_manager import db
 from database.models import FileDAO, ClassificationDAO, MetadataDAO, TagDAO
 from utils.display_utils import format_size, truncate_path, get_file_icon, get_file_color
@@ -938,153 +939,18 @@ class ClassifyTab(QWidget):
                 QMessageBox.critical(self, "重命名失败", str(e))
 
     def _recommend_tags_for_file(self, file_id):
-        """智能推荐标签：弹出标签云风格对话框，点击彩色标签即可选中/取消"""
-        record = self._file_model.get_record_by_id(file_id)
-        if record is None:
-            record = self.file_dao.get_by_id(file_id)
-        if not record:
-            notify(self, "文件记录不存在", 'warning', 3000)
-            return
-
-        # 获取推荐标签（优先 AI，降级规则引擎）
-        recommendations, source = self.ai_layer.recommend_tags(record)
-        if not recommendations:
-            QMessageBox.information(self, "标签推荐",
-                                    f"未找到适合「{record['file_name']}」的推荐标签。")
-            return
-
-        # 获取已有标签，避免重复推荐
-        existing_tags = set(t['tag_name'] for t in self.tag_manager.get_tags_by_file(file_id))
-
-        # 构建推荐标签列表（排除已有标签）
-        suggested = [(tag, conf) for tag, conf in recommendations if tag not in existing_tags]
-        if not suggested:
-            QMessageBox.information(self, "标签推荐",
-                                    f"「{record['file_name']}」已有标签覆盖了所有推荐。")
-            return
-
-        # ── 构建标签云风格对话框 ──
-        is_light = getattr(self, '_theme', 'dark') == 'light'
-        dialog_bg = '#eff1f5' if is_light else '#1e1e2e'
-        text_fg = '#4c4f69' if is_light else '#cdd6f4'
-        subtitle_fg = '#7c7f93' if is_light else '#a6adc8'
-        sep_color = '#ccd0da' if is_light else '#45475a'
-
-        dlg = QDialog(self)
-        source_label = "AI" if source == "ai" else "本地规则"
-        dlg.setWindowTitle(f"智能推荐标签 ({source_label})")
-        dlg.setMinimumWidth(420)
-        dlg.setModal(True)
-        dlg.setStyleSheet(f"QDialog {{ background-color: {dialog_bg}; }}")
-
-        layout = QVBoxLayout(dlg)
-        layout.setSpacing(12)
-
-        # 文件信息
-        info = QLabel(f"为「{record['file_name']}」推荐以下标签（点击切换选中/取消）：")
-        info.setWordWrap(True)
-        info.setStyleSheet(f"font-size: 12px; color: {text_fg}; margin-bottom: 4px;")
-        layout.addWidget(info)
-
-        # 已有标签展示（使用与标签云一致的按钮样式，不可切换）
-        if existing_tags:
-            existing_palette = _TAG_LIGHT if is_light else _TAG_COLORS
-            existing_row = QHBoxLayout()
-            existing_row.setSpacing(6)
-            el = QLabel("已有:")
-            el.setStyleSheet(f"color: {subtitle_fg}; font-size: 11pt;")
-            existing_row.addWidget(el)
-            for et in sorted(existing_tags):
-                idx = _tag_color_index(et)
-                bg, fg = existing_palette[idx]
-                tag_btn = _make_tag_btn(f"  {et}  ", bg, fg, pt=13, bold=False, checkable=False)
-                existing_row.addWidget(tag_btn)
-            existing_row.addStretch()
-            layout.addLayout(existing_row)
-
-        # 分隔线
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"color: {sep_color};")
-        layout.addWidget(sep)
-
-        # 推荐标签按钮（标签云样式，与 tags_tab.py 配色一致）
-        palette = _TAG_LIGHT if is_light else _TAG_COLORS
-        tag_buttons = []
-
-        tags_layout = QVBoxLayout()
-        tags_layout.setSpacing(8)
-
-        for tag, conf in suggested:
-            idx = _tag_color_index(tag)
-            bg, fg = palette[idx]
-            display = f"{tag}  ({conf:.0%})"
-            btn = _make_tag_btn(display, bg, fg, pt=13, bold=False, checkable=True)
-            tag_buttons.append((tag, btn, conf))
-            tags_layout.addWidget(btn)
-
-        layout.addLayout(tags_layout)
-
-        # 按钮区
-        btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        btn_box.accepted.connect(dlg.accept)
-        btn_box.rejected.connect(dlg.reject)
-        layout.addWidget(btn_box)
-
-        # 显示对话框
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        # 收集选中的标签
-        selected = [tag for tag, btn, _ in tag_buttons if btn.isChecked()]
-        if not selected:
-            return
-
-        try:
-            self.tag_manager.batch_add_tags([file_id], selected)
-            notify(self, f"已添加标签: {', '.join(selected)}", 'success', 3500)
-            logger.info(f"标签推荐: file_id={file_id} 添加了标签 {selected}")
-        except Exception as e:
-            logger.error(f"添加标签失败: {e}")
-            QMessageBox.critical(self, "标签推荐", f"添加标签失败: {e}")
+        """智能推荐标签 —— 委托共享模块"""
+        show_tag_recommendation_dialog(
+            self, file_id, self.file_dao,
+            ai_layer=self.ai_layer, tag_manager=self.tag_manager,
+            theme=getattr(self, '_theme', 'dark'),
+        )
 
     def _ai_describe_file(self, file_id):
-        """AI 描述单个文件"""
-        record = self._file_model.get_record_by_id(file_id)
-        if record is None:
-            record = self.file_dao.get_by_id(file_id)
-        if not record:
-            return
-
-        class _DescWorker(QThread):
-            done = pyqtSignal(str)
-            error = pyqtSignal(str)
-
-            def __init__(self, ai_layer, record, parent=None):
-                super().__init__(parent)
-                self.ai_layer = ai_layer
-                self.record = record
-
-            def run(self):
-                try:
-                    result = self.ai_layer.describe_file(self.record) or "无法生成描述"
-                    self.done.emit(result)
-                except Exception as e:
-                    self.error.emit(str(e))
-
-        self._desc_worker = _DescWorker(self.ai_layer, record, self)
-        self._desc_worker.done.connect(self._on_ai_desc_done)
-        self._desc_worker.error.connect(self._on_ai_desc_error)
-        self._desc_worker.start()
-
-    def _on_ai_desc_done(self, text: str):
-        self._desc_worker = None
-        QMessageBox.information(self, "🤖 AI 文件描述", text)
-
-    def _on_ai_desc_error(self, err: str):
-        self._desc_worker = None
-        QMessageBox.warning(self, "AI 描述失败", err)
-        logger.warning(f"AI 描述文件失败: {err}")
+        """AI 描述单个文件 —— 委托共享模块"""
+        request_ai_describe_file(self, file_id, self.file_dao,
+                                  ai_layer=self.ai_layer,
+                                  on_done=None, on_error=None)  # 使用默认 QMessageBox 回调
 
     def _context_delete(self, file_id):
         """右键菜单：标记删除单个文件"""
