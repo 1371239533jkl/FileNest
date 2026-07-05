@@ -1,0 +1,14 @@
+{
+  "active_provider": "deepseek",
+  "providers": {
+    "deepseek": {
+      "provider_id": "deepseek",
+      "name": "DeepSeek",
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "",
+      "model": "deepseek-chat",
+      "models": "deepseek-chat,deepseek-reasoner",
+      "timeout": 60.0
+    }
+  }
+}

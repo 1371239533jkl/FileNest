@@ -16,6 +16,14 @@ logs/
 # AI 会话历史（用户数据，不进版本库）
 sessions/
 
+# AI 模型配置（包含 API Key）
+ai_models.json
+
+# SQLite 数据库文件（本地数据，不进版本库）
+*.db
+*.db-wal
+*.db-shm
+
 # Python 缓存
 __pycache__/
 *.pyc

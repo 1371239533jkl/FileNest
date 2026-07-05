@@ -17,16 +17,8 @@ WINDOW_HEIGHT = 800
 MIN_WINDOW_WIDTH = 1000
 MIN_WINDOW_HEIGHT = 700
 
-# MySQL数据库配置（密码从环境变量读取，不再硬编码）
-MYSQL_CONFIG = {
-    'host': 'localhost',
-    'port': 3306,
-    'user': 'root',
-    'password': os.getenv('SMART_FM_DB_PASSWORD', '123456'),
-    'database': 'smart_file_manager',
-    'charset': 'utf8mb4',
-    'autocommit': True,
-}
+# SQLite 嵌入式数据库配置（零依赖，开箱即用）
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'smart_file_manager.db')
 
 # 文件类型定义
 FILE_TYPES = {
