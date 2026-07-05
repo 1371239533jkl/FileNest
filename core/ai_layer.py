@@ -22,7 +22,6 @@ from core.ai_prompts import (
     build_dashboard_insight_messages, build_cleanup_advice_messages,
     build_rename_suggestion_messages, build_content_summary_messages,
     build_classify_rule_messages,
-    build_chat_messages,
 )
 from core.ai_response import ResponseParser
 from core.ai_preprocessor import Preprocessor, OutputValidator

@@ -200,23 +200,37 @@ class AIModelConfigManager:
         logger.info(f"已切换 AI 提供商: {provider_id}")
         return True
 
-    def update_api_key(self, provider_id: str, api_key: str) -> bool:
-        """更新提供商的 API Key"""
-        providers = self._data.get("providers", {})
-        if provider_id not in providers:
-            return False
-        providers[provider_id]["api_key"] = api_key
-        self._save()
-        return True
+    # ── 预置模板 ──
 
-    def update_model(self, provider_id: str, model: str) -> bool:
-        """更新提供商的当前模型"""
-        providers = self._data.get("providers", {})
-        if provider_id not in providers:
-            return False
-        providers[provider_id]["model"] = model
-        self._save()
-        return True
+    # ── 上下文窗口查询 ──
+
+    # 模型上下文窗口大小估算（字符数），用于 UI 指示器和压缩阈值
+    # key 为小写子串匹配，按匹配优先级排列
+    _CONTEXT_LIMITS: list = [
+        # 128K 级别
+        ("128k", 128000), ("moonshot-v1-128", 128000), ("gpt-4o", 128000),
+        ("gpt-4-turbo", 128000), ("claude-3", 200000), ("claude-3.5", 200000),
+        ("glm-4", 128000),
+        # 64K 级别
+        ("deepseek", 64000), ("deepseek-v4", 64000), ("deepseek-r1", 64000),
+        ("deepseek-reasoner", 64000), ("64k", 64000),
+        # 32K 级别
+        ("qwen-plus", 32000), ("qwen-max", 32000), ("qwen2.5-7b", 32000),
+        ("32k", 32000), ("qwen2.5-32b", 32000), ("qwen2.5-72b", 32000),
+        # 16K 级别
+        ("gpt-3.5", 16000), ("16k", 16000),
+        # 8K 级别（兜底）
+        ("8k", 8000), ("qwen-turbo", 8000), ("qwen2.5-1.5b", 8000),
+    ]
+
+    @classmethod
+    def get_model_context_limit(cls, model_name: str) -> int:
+        """根据模型名返回估算的上下文窗口大小（字符数），未知模型默认 8K"""
+        name_lower = model_name.lower()
+        for pattern, limit in cls._CONTEXT_LIMITS:
+            if pattern in name_lower:
+                return limit
+        return 8000  # 未知模型：保守 8K
 
     # ── 预置模板 ──
 
@@ -238,12 +252,3 @@ class AIModelConfigManager:
         self.add_provider(provider)
         return provider
 
-    @classmethod
-    def get_builtin_ids(cls) -> list:
-        """获取所有内置模板的 ID 列表"""
-        return list(BUILTIN_PROVIDERS.keys())
-
-    @classmethod
-    def get_builtin_info(cls, provider_id: str) -> Optional[dict]:
-        """获取内置模板信息"""
-        return BUILTIN_PROVIDERS.get(provider_id)

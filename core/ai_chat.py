@@ -57,12 +57,15 @@ class AiConversation:
     维护完整的对话历史，支持自动上下文压缩和会话持久化。
     """
 
-    MAX_CONTEXT_TOKENS_ESTIMATE = 8000     # 估算的上下文窗口大小（字符数）
+    MAX_CONTEXT_TOKENS_ESTIMATE = 8000     # 默认估算的上下文窗口大小（字符数）
     COMPRESS_THRESHOLD = 0.8               # 达到 80% 时触发压缩
 
     def __init__(self, system_prompt: str = "", model: str = "",
-                 session_id: str = None, title: str = ""):
+                 session_id: str = None, title: str = "",
+                 max_context_size: int = None):
         self.model = model
+        # 支持按模型动态设置上下文窗口大小
+        self.max_context_size = max_context_size or self.MAX_CONTEXT_TOKENS_ESTIMATE
         self.meta = SessionMeta(
             session_id=session_id or f"session_{int(time.time())}_{os.urandom(4).hex()}",
             title=title or "新对话",
@@ -173,12 +176,12 @@ class AiConversation:
             True 表示执行了压缩
         """
         size = self.estimate_context_size()
-        threshold = int(self.MAX_CONTEXT_TOKENS_ESTIMATE * self.COMPRESS_THRESHOLD)
+        threshold = int(self.max_context_size * self.COMPRESS_THRESHOLD)
 
         if size < threshold:
             return False
 
-        logger.info(f"上下文超限 ({size}/{self.MAX_CONTEXT_TOKENS_ESTIMATE})，执行压缩...")
+        logger.info(f"上下文超限 ({size}/{self.max_context_size})，执行压缩...")
 
         # 保留 system + 最近 6 条 user/assistant 消息
         system_msgs = [m for m in self._messages if m.role == "system"]
