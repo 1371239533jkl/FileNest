@@ -271,7 +271,11 @@ class OpenAICompatibleBackend:
             )
 
         except httpx.HTTPStatusError as e:
-            logger.error(f"AI API Stream HTTP {e.response.status_code}: {e.response.text[:200]}")
+            try:
+                body_snippet = e.response.read().decode("utf-8", errors="replace")[:200]
+            except Exception:
+                body_snippet = "<无法读取响应体>"
+            logger.error(f"AI API Stream HTTP {e.response.status_code}: {body_snippet}")
             raise
         except httpx.TimeoutException:
             logger.error(f"AI API Stream 超时 ({self.timeout}s)")
@@ -318,5 +322,4 @@ class OpenAICompatibleBackend:
         )
 
 
-# 向后兼容别名
-DeepSeekBackend = OpenAICompatibleBackend
+

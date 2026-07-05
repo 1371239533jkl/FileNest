@@ -472,27 +472,6 @@ GENERAL_ASSISTANT_SYSTEM_PROMPT = """你是智能文件管家中的 AI 全能助
 工作目录: {working_directory}"""
 
 
-def build_chat_messages(system_prompt: str = None,
-                        working_directory: str = "",
-                        current_time: str = "") -> list[dict]:
-    """构造通用对话的 system 消息
-
-    Args:
-        system_prompt: 自定义 system prompt，为 None 时使用默认
-        working_directory: 当前工作目录路径
-        current_time: 当前时间字符串
-    """
-    if system_prompt is None:
-        from datetime import datetime
-        if not current_time:
-            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        system_prompt = GENERAL_ASSISTANT_SYSTEM_PROMPT.format(
-            current_time=current_time,
-            working_directory=working_directory or "未知",
-        )
-    return [{"role": "system", "content": system_prompt}]
-
-
 def build_tool_result_message(tool_call_id: str, tool_name: str,
                                result: str) -> dict:
     """构造工具调用结果消息（OpenAI 格式）"""

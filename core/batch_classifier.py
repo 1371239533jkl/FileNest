@@ -1,14 +1,12 @@
 """
 通用后台批量分类线程 - 供扫描后处理和手动重新分类共用
-独立 DB 连接，不抢主线程的连接；批量 flush 提高性能。
+ponytail: 从 pymysql 独立连接切换为 db 单例（threading.local 线程安全）。
 """
-import pymysql
-from pymysql.cursors import DictCursor
 from datetime import datetime
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from config import MYSQL_CONFIG
+from database.db_manager import db
 from utils.logger import logger
 
 
@@ -34,13 +32,10 @@ class BatchClassifyWorker(QThread):
         self._cancelled = True
 
     def run(self):
-        conn = pymysql.connect(**MYSQL_CONFIG)
         try:
-            with conn.cursor(DictCursor) as cur:
-                cur.execute(
-                    "SELECT * FROM files WHERE status = 'active' "
-                    "ORDER BY scan_time DESC")
-                files = cur.fetchall()
+            files = db.execute_query(
+                "SELECT * FROM files WHERE status = 'active' "
+                "ORDER BY scan_time DESC")
 
             total = len(files)
             classified = 0
@@ -54,14 +49,13 @@ class BatchClassifyWorker(QThread):
                 try:
                     # ── 元数据提取（可选）──
                     if self.do_metadata:
-                        self._extract_and_save_metadata(conn, record)
+                        self._extract_and_save_metadata(record)
 
                     # ── 分类 ──
                     if self.classifier is not None:
-                        with conn.cursor() as cur:
-                            cur.execute(
-                                "DELETE FROM file_classifications WHERE file_id = %s",
-                                (file_id,))
+                        db.execute_update(
+                            "DELETE FROM file_classifications WHERE file_id = ?",
+                            (file_id,))
 
                         cls_results = self.classifier._classify_file_in_memory(record)
                         if cls_results:
@@ -73,7 +67,7 @@ class BatchClassifyWorker(QThread):
 
                     # 每 100 条 flush
                     if len(batch) >= 100:
-                        self._flush_batch(conn, batch)
+                        self._flush_batch(batch)
                         batch.clear()
 
                 except Exception as e:
@@ -86,7 +80,7 @@ class BatchClassifyWorker(QThread):
 
             # 最后一次 flush
             if batch:
-                self._flush_batch(conn, batch)
+                self._flush_batch(batch)
 
             self.progress.emit(total, total)
             logger.info(f"批量分类完成: {classified}/{total}")
@@ -95,25 +89,20 @@ class BatchClassifyWorker(QThread):
         except Exception as e:
             logger.error(f"批量分类出错: {e}")
             self.error.emit(str(e))
-        finally:
-            conn.close()
 
     # ── 私有方法 ──
 
     @staticmethod
-    def _flush_batch(conn, batch: list) -> None:
-        """批量插入分类，使用 INSERT IGNORE 避免重复"""
-        with conn.cursor() as cur:
-            # 使用 INSERT IGNORE 避免重复插入相同的分类
-            cur.executemany(
-                "INSERT IGNORE INTO file_classifications "
-                "(file_id, classification_type, classification_value, "
-                "classification_time, confidence_score) "
-                "VALUES (%s, %s, %s, %s, %s)", batch)
-            conn.commit()
+    def _flush_batch(batch: list) -> None:
+        """批量插入分类，使用 INSERT OR IGNORE 避免重复"""
+        db.execute_many(
+            "INSERT OR IGNORE INTO file_classifications "
+            "(file_id, classification_type, classification_value, "
+            "classification_time, confidence_score) "
+            "VALUES (?, ?, ?, ?, ?)", batch)
 
     @staticmethod
-    def _extract_and_save_metadata(conn, record: dict) -> None:
+    def _extract_and_save_metadata(record: dict) -> None:
         """提取并保存文件元数据（异常只记录日志，不中断流程）"""
         try:
             from core.metadata_extractor import extract_metadata
@@ -122,13 +111,13 @@ class BatchClassifyWorker(QThread):
                 return
 
             cols = ['file_id'] + list(metadata.keys())
-            placeholders = ', '.join(['%s'] * len(cols))
-            update_parts = ', '.join(f'`{k}`=VALUES(`{k}`)' for k in metadata)
-            sql = (f"INSERT INTO file_metadata (`{'`, `'.join(cols)}`) "
+            placeholders = ', '.join(['?'] * len(cols))
+            col_list = '", "'.join(cols)
+            update_parts = ', '.join(f'"{k}"=excluded."{k}"' for k in metadata)
+            sql = (f'INSERT INTO file_metadata ("{col_list}") '
                    f"VALUES ({placeholders}) "
-                   f"ON DUPLICATE KEY UPDATE {update_parts}")
-            with conn.cursor() as cur:
-                cur.execute(sql, (record['id'],) + tuple(metadata.values()))
+                   f"ON CONFLICT(file_id) DO UPDATE SET {update_parts}")
+            db.execute_update(sql, (record['id'],) + tuple(metadata.values()))
         except Exception as e:
             logger.warning(
                 f"元数据提取失败 {record.get('file_name', '?')}: {e}")

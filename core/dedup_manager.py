@@ -114,34 +114,3 @@ class DedupManager:
         logger.info(f"去重完成 组{group_id}: 保留ID={keep_file_id}, 删除{removed}个")
         return batch_id, removed
 
-    def auto_dedup(self, strategy: str = 'keep_newest') -> Tuple[int, list]:
-        """自动去重所有重复文件"""
-        groups = self.find_duplicates()
-        total_removed = 0
-        batch_ids = []
-
-        for group_id, files in groups.items():
-            keep_id, remove_ids = self.suggest_keep(files, strategy)
-            if keep_id and remove_ids:
-                bid, removed = self.remove_duplicates(group_id, keep_id, remove_ids)
-                total_removed += removed
-                batch_ids.append(bid)
-
-        logger.info(f"自动去重完成: 共删除 {total_removed} 个重复文件")
-        return total_removed, batch_ids
-
-    def get_duplicate_stats(self) -> dict:
-        """获取重复文件统计"""
-        groups = self.find_duplicates()
-        total_groups = len(groups)
-        total_files = sum(len(files) for files in groups.values())
-        wasted_size = 0
-        for files in groups.values():
-            sizes = [f.get('file_size', 0) for f in files]
-            if sizes:
-                wasted_size += sum(sizes) - min(sizes)
-        return {
-            'groups': total_groups,
-            'total_files': total_files,
-            'wasted_size': wasted_size,
-        }
