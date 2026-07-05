@@ -121,10 +121,6 @@ class OperationHistoryManager:
 
         self.file_dao.update_status(file_id, 'active')
 
-    def get_recent_operations(self, limit: int = 100,
-                              op_type: Optional[str] = None) -> list:
-        return self.history_dao.get_recent(limit, op_type)
-
     def get_undoable_operations(self, limit: int = 100) -> list:
         return self.history_dao.get_undoable(limit)
 

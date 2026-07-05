@@ -48,22 +48,6 @@ class FileClassifier:
 
         return results
 
-    def classify_files(self, file_records: List[dict]) -> int:
-        """批量分类"""
-        total = len(file_records)
-        classified = 0
-        for record in file_records:
-            try:
-                # 先清除旧分类
-                self.cls_dao.delete_by_file_id(record['id'])
-                result = self.classify_file(record)
-                if result:
-                    classified += 1
-            except Exception as e:
-                logger.warning(f"分类文件失败 {record.get('file_name')}: {e}")
-        logger.info(f"分类完成: {classified}/{total}")
-        return classified
-
     def _classify_by_type(self, file_record: dict) -> str:
         ft = file_record.get('file_type', 'other')
         return FILE_TYPE_NAMES.get(ft, '其他')

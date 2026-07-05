@@ -1,11 +1,12 @@
 """
 轻量级图表组件 - 使用 QPainter 绘制，无外部依赖
 """
-from PyQt6.QtWidgets import QWidget, QFrame, QVBoxLayout, QLabel
+from PyQt6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel
 from PyQt6.QtCore import Qt, QRectF, QPointF
 from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QBrush
 
 from utils.display_utils import format_size
+
 
 
 # Catppuccin 色板（深/浅色主题通用）
@@ -17,30 +18,50 @@ _PALETTE = [
 
 
 class StatCard(QFrame):
-    """统计卡片：数值 + 标签"""
+    """统计卡片：数值 + 标签 + 子标题 + 图标"""
 
     def __init__(self, label: str, value: str = "-", color: str = '#cba6f7',
-                 parent=None):
+                 icon: str = '', parent=None):
         super().__init__(parent)
-        self.setFixedHeight(90)
+        self.setMinimumHeight(80)
         self.setMinimumWidth(140)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(4)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(6)
 
+        # 标题行：图标 + 标签
+        header_layout = QHBoxLayout()
+        if icon:
+            self._icon_label = QLabel(icon)
+            self._icon_label.setStyleSheet(
+                f"font-size: 16px; color: {color}; border: none; background: transparent;")
+            header_layout.addWidget(self._icon_label)
+        self._text_label = QLabel(label)
+        self._text_label.setStyleSheet(
+            f"font-size: 12px; color: #a0a0b0; border: none; background: transparent;")
+        header_layout.addWidget(self._text_label)
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
+
+        # 数值
         self._value_label = QLabel(value)
         self._value_label.setStyleSheet(
-            f"font-size: 22px; font-weight: bold; color: {color}; "
+            f"font-size: 26px; font-weight: bold; color: #ffffff; "
             f"border: none; background: transparent;")
         layout.addWidget(self._value_label)
 
-        self._text_label = QLabel(label)
-        self._text_label.setObjectName("subtitleLabel")
-        self._text_label.setStyleSheet("border: none; background: transparent;")
-        layout.addWidget(self._text_label)
+        # 子标题
+        self._sub_label = QLabel("")
+        self._sub_label.setStyleSheet(
+            f"font-size: 12px; color: {color}; border: none; background: transparent;")
+        layout.addWidget(self._sub_label)
 
     def set_value(self, value: str):
         self._value_label.setText(value)
+
+    def set_sub(self, text: str):
+        self._sub_label.setText(text)
+
 
 
 class PieChartWidget(QWidget):

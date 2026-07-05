@@ -14,7 +14,7 @@ import os
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Tuple, Any
 
-from config import FILE_TYPES, FILE_TYPE_NAMES
+from config import FILE_TYPE_NAMES
 from utils.logger import logger
 from utils.display_utils import format_size
 
@@ -929,49 +929,4 @@ class CleanupAdvisor:
             return None
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 顶层外观
-# ══════════════════════════════════════════════════════════════════════════════
 
-class RuleEngine:
-    """规则引擎统一入口。
-
-    整合三大功能模块：
-      - NL 搜索解析
-      - 标签推荐
-      - 清理建议
-
-    用法示例:
-        engine = RuleEngine(file_dao, tag_dao, cls_dao)
-        params = engine.parse_search("大于100MB的图片")        # NL -> 结构化搜索参数
-        tags = engine.recommend_tags(file_record)              # 文件 -> 推荐标签
-        report = engine.cleanup_report()                       # 数据库 -> 清理报告
-    """
-
-    def __init__(self, file_dao=None, tag_dao=None, cls_dao=None):
-        self.search_parser = NLSearchParser()
-        self.tag_recommender = TagRecommender()
-        self.cleanup_advisor = CleanupAdvisor(file_dao, tag_dao, cls_dao) if file_dao else None
-
-    def parse_search(self, query: str) -> Dict[str, Any]:
-        """解析自然语言搜索查询"""
-        return self.search_parser.parse(query)
-
-    def explain_search(self, query: str) -> str:
-        """解释解析结果"""
-        return self.search_parser.explain(query)
-
-    def recommend_tags(self, file_record: dict, max_tags: int = 10) -> List[Tuple[str, float]]:
-        """为单个文件推荐标签"""
-        return self.tag_recommender.recommend(file_record, max_tags)
-
-    def recommend_tags_batch(self, file_records: list,
-                              max_tags: int = 10) -> Dict[int, List[Tuple[str, float]]]:
-        """批量推荐标签"""
-        return self.tag_recommender.recommend_batch(file_records, max_tags)
-
-    def cleanup_report(self) -> Optional[Dict[str, Any]]:
-        """生成清理建议报告"""
-        if not self.cleanup_advisor:
-            return None
-        return self.cleanup_advisor.analyze()

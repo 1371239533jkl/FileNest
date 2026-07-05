@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QSpinBox, QFormLayout, QGroupBox, QMessageBox
 )
 
-from config import DEDUP_STRATEGIES, MYSQL_CONFIG
+from config import DEDUP_STRATEGIES, DB_PATH
 from database.db_manager import db
 from database.models import SystemSettingsDAO
 from utils.logger import logger
@@ -68,13 +68,20 @@ class SettingsTab(QWidget):
 
         layout.addWidget(group)
 
-        # 数据库信息（从配置读取，非硬编码）
-        db_group = QGroupBox("数据库信息")
+        # 数据库信息（SQLite 嵌入式，零配置）
+        import os
+        db_size = '（新建）'
+        if os.path.exists(DB_PATH):
+            size_bytes = os.path.getsize(DB_PATH)
+            if size_bytes < 1024 * 1024:
+                db_size = f'{size_bytes / 1024:.1f} KB'
+            else:
+                db_size = f'{size_bytes / (1024 * 1024):.1f} MB'
+        db_group = QGroupBox("数据库信息（SQLite 嵌入式）")
         db_layout = QFormLayout(db_group)
-        db_layout.addRow("主机:", QLabel(MYSQL_CONFIG.get('host', 'localhost')))
-        db_layout.addRow("端口:", QLabel(str(MYSQL_CONFIG.get('port', 3306))))
-        db_layout.addRow("数据库名:", QLabel(MYSQL_CONFIG.get('database', '-')))
-        db_layout.addRow("用户名:", QLabel(MYSQL_CONFIG.get('user', 'root')))
+        db_layout.addRow("数据库文件:", QLabel(DB_PATH))
+        db_layout.addRow("文件大小:", QLabel(db_size))
+        db_layout.addRow("引擎:", QLabel("SQLite (WAL 模式)"))
         layout.addWidget(db_group)
 
         # 操作按钮行
