@@ -6,7 +6,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/version-2.0.0-blue" alt="Version">
   <img src="https://img.shields.io/badge/python-3.9+-blue" alt="Python">
-  <img src="https://img.shields.io/badge/MySQL-5.7+-orange" alt="MySQL">
+  <img src="https://img.shields.io/badge/database-SQLite-blue" alt="SQLite">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey" alt="Platform">
 </p>
@@ -88,7 +88,7 @@
 | 层 | 技术 |
 |----|------|
 | 前端 | PyQt6 |
-| 数据库 | MySQL 5.7+（PyMySQL） |
+| 数据库 | SQLite（Python 内置，零配置） |
 | AI | OpenAI 兼容 API（DeepSeek/通义千问/Moonshot/智谱等多模型） |
 | 哈希去重 | SHA256 / MD5 |
 | 回收区 | 应用本地 .trash/（shutil） |
@@ -103,7 +103,6 @@
 ### 前置要求
 
 - Python 3.9 或更高版本
-- MySQL 5.7 或更高版本（默认本地 3306 端口）
 - Windows / macOS / Linux 均可运行
 
 ### 依赖说明
@@ -111,7 +110,6 @@
 | 包 | 用途 |
 |----|------|
 | PyQt6 | GUI 框架 |
-| PyMySQL | MySQL 数据库连接 |
 | Pillow | 图片处理、EXIF 提取 |
 | PyPDF2 + PyMuPDF | PDF 属性提取 |
 | python-docx | Word 文档处理 |
@@ -120,6 +118,8 @@
 | pygments | 代码文件语法高亮预览 |
 | httpx | AI 联网搜索 HTTP 客户端 |
 | python-dotenv | .env 环境变量加载 |
+
+数据库使用 Python 标准库内置的 SQLite3，无需安装任何外部数据库。
 
 ### 步骤
 
@@ -131,25 +131,20 @@ cd FileNest
 # 2. 安装依赖
 pip install -r requirements.txt
 
-# 3. 配置数据库密码
-echo SMART_FM_DB_PASSWORD=你的MySQL密码 > .env
-
-# 4. 启动
+# 3. 启动（首次自动创建数据库）
 python main.py
 ```
 
-> 首次启动时应用会自动创建数据库和全部数据表，无需手动执行 SQL。
+> 首次启动时应用会自动创建 SQLite 数据库和全部数据表，无需任何手动配置。
 
 ### 配置说明
 
-数据库密码通过 `.env` 文件配置（已加入 `.gitignore`），避免密码硬编码。
+数据库文件默认保存在项目根目录 `smart_file_manager.db`，使用 WAL 模式。AI 功能需要配置 API Key：
 
 ```ini
-# .env
-SMART_FM_DB_PASSWORD=你的MySQL密码
+# .env（可选）
+SMART_FM_AI_KEY=你的API密钥
 ```
-
-其他数据库连接参数可在 `config.py` 中修改。
 
 ---
 
@@ -421,7 +416,6 @@ FileNest/
 │   ├── settings_tab.py     # 系统设置（通用/扫描/重命名/去重策略/AI配置）
 │   ├── chart_widgets.py    # 图表组件（StatCard/Pie/Bar/TrendChart）
 │   ├── empty_state.py      # 空状态引导组件
-│   ├── flow_layout.py      # 流式布局
 │   ├── onboarding.py       # 首次启动引导对话框
 │   ├── styles.py           # 双主题 QSS 样式（Catppuccin）
 │   ├── theme_manager.py    # 主题管理器
@@ -434,8 +428,7 @@ FileNest/
 │   ├── __init__.py
 │   ├── logger.py           # 日志（RotatingFileHandler）
 │   ├── date_utils.py       # 日期处理
-│   ├── display_utils.py    # 格式化显示（大小/路径/图标/颜色/字体）
-│   └── signal_bus.py       # 全局信号总线（模块解耦通信）
+│   └── display_utils.py    # 格式化显示（大小/路径/图标/颜色/字体）
 ├── migrations/             # 数据库迁移
 │   ├── add_unique_file_path.sql
 │   ├── fix_duplicate_classifications.sql
