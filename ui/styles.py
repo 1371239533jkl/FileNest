@@ -13,6 +13,9 @@ QMainWindow {
     font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
     font-size: 13px;
 }
+QWidget#appCentral, QStackedWidget#contentPanel {
+    background-color: #0f0f1a;
+}
 QWidget {
     background-color: transparent;
     color: #e8e8ef;
@@ -243,6 +246,12 @@ QHeaderView::section {
     border-bottom: 1px solid #2a2a3e;
     font-weight: bold;
 }
+QTableCornerButton::section {
+    background-color: #1a1a2e;
+    border: none;
+    border-right: 1px solid #2a2a3e;
+    border-bottom: 1px solid #2a2a3e;
+}
 
 /* 树形视图 */
 QTreeWidget {
@@ -432,6 +441,31 @@ QMainWindow {
     color: #333333;
     font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
     font-size: 13px;
+}
+QLabel#scanPathLabel {
+    color: #a0a0b0;
+    background-color: #1a1a2e;
+    border-radius: 6px;
+    padding: 8px;
+}
+QLabel#scanEtaLabel { color: #60a5fa; }
+QLabel#scanDirectoryTitle {
+    color: #c4b5fd;
+    font-size: 15px;
+    font-weight: bold;
+    margin-top: 10px;
+}
+QPushButton#scanDeleteBtn {
+    background-color: #e11d48;
+    color: #ffffff;
+    border: none;
+    border-radius: 4px;
+    font-size: 11px;
+    padding: 0 2px;
+}
+QPushButton#scanDeleteBtn:hover { background-color: #be123c; }
+QWidget#appCentral, QStackedWidget#contentPanel {
+    background-color: #f5f7fa;
 }
 QWidget {
     background-color: transparent;
@@ -645,6 +679,12 @@ QHeaderView::section {
     border-bottom: 1px solid #e2e8f0;
     font-weight: bold;
 }
+QTableCornerButton::section {
+    background-color: #ffffff;
+    border: none;
+    border-right: 1px solid #e2e8f0;
+    border-bottom: 1px solid #e2e8f0;
+}
 
 /* 树形视图 */
 QTreeWidget {
@@ -796,6 +836,29 @@ QLabel#cardBg {
     border-radius: 12px;
     border: none;
 }
+QLabel#scanPathLabel {
+    color: #64748b;
+    background-color: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    padding: 8px;
+}
+QLabel#scanEtaLabel { color: #2563eb; }
+QLabel#scanDirectoryTitle {
+    color: #7c3aed;
+    font-size: 15px;
+    font-weight: bold;
+    margin-top: 10px;
+}
+QPushButton#scanDeleteBtn {
+    background-color: #e11d48;
+    color: #ffffff;
+    border: none;
+    border-radius: 4px;
+    font-size: 11px;
+    padding: 0 2px;
+}
+QPushButton#scanDeleteBtn:hover { background-color: #be123c; }
 
 /* 消息框 */
 QMessageBox {

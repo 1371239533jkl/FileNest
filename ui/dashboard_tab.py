@@ -51,9 +51,8 @@ class DashboardTab(QWidget):
 
         # 顶部标题
         header = QHBoxLayout()
-        title = QLabel("仪表盘")
-        title.setStyleSheet("font-weight: bold; color: #ffffff; font-size: 18px;")
-        header.addWidget(title)
+        self.title_label = QLabel("仪表盘")
+        header.addWidget(self.title_label)
         header.addStretch()
 
         refresh_btn = QPushButton("刷新")
@@ -94,25 +93,19 @@ class DashboardTab(QWidget):
 
         # AI 洞察卡片 — 始终显示，AI 不可用时显示占位提示
         insight_card = QFrame()
-        insight_card.setStyleSheet(
-            "background-color: #1a1a2e; border-radius: 12px;")
         insight_card.setMinimumWidth(240)
         insight_layout = QVBoxLayout(insight_card)
         insight_layout.setContentsMargins(16, 16, 16, 16)
         insight_layout.setSpacing(10)
         
-        insight_title = QLabel("AI 文件洞察")
-        insight_title.setStyleSheet("font-weight: bold; font-size: 13px; color: #ffffff;")
-        insight_layout.addWidget(insight_title)
+        self.insight_title = QLabel("AI 文件洞察")
+        insight_layout.addWidget(self.insight_title)
         
-        insight_sub = QLabel("基于文件类型和使用模式的智能分析")
-        insight_sub.setStyleSheet("color: #6b6b7b; font-size: 12px;")
-        insight_layout.addWidget(insight_sub)
+        self.insight_sub = QLabel("基于文件类型和使用模式的智能分析")
+        insight_layout.addWidget(self.insight_sub)
         
         self.insight_label = QLabel("")
         self.insight_label.setWordWrap(True)
-        self.insight_label.setStyleSheet(
-            "font-size: 12px; color: #a0a0b0; line-height: 1.5;")
         insight_layout.addWidget(self.insight_label)
         insight_layout.addStretch()
         self._insight_widget = insight_card
@@ -121,21 +114,17 @@ class DashboardTab(QWidget):
         # 类型分布饼图
         self.pie_type = PieChartWidget()
         self.pie_type.setMinimumHeight(200)
-        self.pie_type.setStyleSheet("background-color: #1a1a2e; border-radius: 12px;")
         mid_row.addWidget(self.pie_type, 2)
 
         # 最近活动
         activity_card = QFrame()
-        activity_card.setStyleSheet(
-            "background-color: #1a1a2e; border-radius: 12px;")
         activity_card.setMinimumWidth(200)
         activity_layout = QVBoxLayout(activity_card)
         activity_layout.setContentsMargins(16, 16, 16, 16)
         activity_layout.setSpacing(10)
         
-        activity_title = QLabel("最近活动")
-        activity_title.setStyleSheet("font-weight: bold; font-size: 13px; color: #ffffff;")
-        activity_layout.addWidget(activity_title)
+        self.activity_title = QLabel("最近活动")
+        activity_layout.addWidget(self.activity_title)
         
         self.activity_list = QVBoxLayout()
         self.activity_list.setSpacing(8)
@@ -152,29 +141,22 @@ class DashboardTab(QWidget):
         # 文件增长趋势
         self.trend_monthly = TrendChartWidget()
         self.trend_monthly.setMinimumHeight(200)
-        self.trend_monthly.setStyleSheet(
-            "background-color: #1a1a2e; border-radius: 12px;")
         bottom_row.addWidget(self.trend_monthly, 2)
 
         # 快捷操作
         quick_card = QFrame()
-        quick_card.setStyleSheet(
-            "background-color: #1a1a2e; border-radius: 12px;")
         quick_card.setMinimumWidth(180)
         quick_card.setMinimumHeight(200)
         quick_layout = QVBoxLayout(quick_card)
         quick_layout.setContentsMargins(16, 16, 16, 16)
         quick_layout.setSpacing(8)
         
-        quick_title = QLabel("快捷操作")
-        quick_title.setStyleSheet("font-weight: bold; font-size: 13px; color: #ffffff;")
-        quick_layout.addWidget(quick_title)
+        self.quick_title = QLabel("快捷操作")
+        quick_layout.addWidget(self.quick_title)
         
         def _mk_btn(text, icon):
             btn = QPushButton(f"{icon}  {text}")
-            btn.setStyleSheet(
-                "text-align: left; padding: 10px 14px; border: none; "
-                "background-color: #2a2a3e; color: #e8e8ef; border-radius: 8px;")
+            btn.setObjectName("dashboardQuickAction")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             return btn
         
@@ -202,6 +184,28 @@ class DashboardTab(QWidget):
         self.btn_quick_scan.clicked.connect(self._on_quick_scan)
         self.btn_quick_dup.clicked.connect(self._on_quick_dup)
         self.btn_quick_ai.clicked.connect(self._on_quick_ai)
+        self._theme_cards = [insight_card, activity_card, quick_card,
+                             self.pie_type, self.trend_monthly]
+        self.apply_theme('dark')
+
+    def apply_theme(self, theme_name: str):
+        """Update widgets with local styles that global QSS cannot override."""
+        is_dark = theme_name == 'dark'
+        surface = '#1a1a2e' if is_dark else '#ffffff'
+        surface_alt = '#2a2a3e' if is_dark else '#f1f5f9'
+        text = '#ffffff' if is_dark else '#0f172a'
+        muted = '#a0a0b0' if is_dark else '#64748b'
+        for card in getattr(self, '_theme_cards', []):
+            card.setStyleSheet(f'background-color: {surface}; border-radius: 12px;')
+        for label in (self.title_label, self.insight_title, self.activity_title, self.quick_title):
+            label.setStyleSheet(f'font-weight: bold; font-size: 13px; color: {text};')
+        self.title_label.setStyleSheet(f'font-weight: bold; font-size: 18px; color: {text};')
+        self.insight_sub.setStyleSheet(f'color: {muted}; font-size: 12px;')
+        self.insight_label.setStyleSheet(f'font-size: 12px; color: {muted}; line-height: 1.5;')
+        for button in (self.btn_quick_scan, self.btn_quick_dup, self.btn_quick_ai):
+            button.setStyleSheet(
+                f'text-align: left; padding: 10px 14px; border: none; '
+                f'background-color: {surface_alt}; color: {text}; border-radius: 8px;')
 
     def refresh_data(self):
         try:

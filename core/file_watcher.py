@@ -2,6 +2,7 @@
 文件变化监控 - 使用 watchdog 监控已扫描目录的变化
 """
 import os
+import threading
 from typing import Optional
 from PyQt6.QtCore import QObject, pyqtSignal, QTimer, Qt, QMetaObject
 
@@ -36,6 +37,7 @@ class DirectoryWatcher(QObject):
         self._observer = None
         self._watched_dirs = set()
         self._pending_events = []
+        self._events_lock = threading.Lock()
         # QTimer 延迟到 start() 中创建，确保在主线程中
         self._debounce_timer = None
         self._enabled = False
@@ -113,7 +115,8 @@ class DirectoryWatcher(QObject):
                 logger.warning(f"停止监控异常: {e}")
             self._observer = None
             self._watched_dirs.clear()
-            self._pending_events.clear()
+            with self._events_lock:
+                self._pending_events.clear()
             self._enabled = False
             self.monitoring_stopped.emit()
             logger.info("已停止文件监控")
@@ -132,11 +135,12 @@ class DirectoryWatcher(QObject):
             return
         
         evt = FileChangeEvent(event_type, path, event.is_directory)
-        self._pending_events.append(evt)
+        with self._events_lock:
+            self._pending_events.append(evt)
         
         # 使用 QMetaObject.invokeMethod 将 QTimer 启动调度到主线程
         # 因为 QTimer 不能在非 GUI 线程中启动
-        if self._debounce_timer and not self._debounce_timer.isActive():
+        if self._debounce_timer:
             QMetaObject.invokeMethod(
                 self._debounce_timer, 
                 "start",
@@ -145,11 +149,11 @@ class DirectoryWatcher(QObject):
     
     def _flush_events(self):
         """防抖结束后发出累积的事件"""
-        if not self._pending_events:
-            return
-        
-        events = list(self._pending_events)
-        self._pending_events.clear()
+        with self._events_lock:
+            if not self._pending_events:
+                return
+            events = list(self._pending_events)
+            self._pending_events.clear()
         
         logger.debug(f"检测到 {len(events)} 个文件变化")
         self.files_changed.emit(events)
@@ -228,7 +232,6 @@ class WatcherManager:
         
         logger.info(f"文件变化: {', '.join(summary)}")
         
-        # 只在有新增文件时触发自动扫描
-        if created and self._scan_callback:
-            logger.info("检测到新文件，准备自动扫描...")
+        if (created or modified or deleted) and self._scan_callback:
+            logger.info("检测到文件变化，通知上层同步...")
             self._scan_callback()

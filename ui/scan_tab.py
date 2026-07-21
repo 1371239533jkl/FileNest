@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QFileDialog, QProgressBar, QTableWidget, QTableWidgetItem,
     QCheckBox, QMessageBox, QHeaderView, QApplication
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 import os
 from core import FileScanWorker
@@ -21,14 +21,35 @@ from ui.toast import notify
 from ui.empty_state import create_empty_state
 
 
+class CleanupAnalysisWorker(QThread):
+    """Run database-heavy cleanup analysis outside the GUI thread."""
+    done = pyqtSignal(dict)
+    error = pyqtSignal(str)
+
+    def run(self):
+        try:
+            report = CleanupAdvisor(
+                file_dao=FileDAO(db),
+                tag_dao=TagDAO(db),
+                cls_dao=ClassificationDAO(db),
+            ).analyze()
+            self.done.emit(report)
+        except Exception as exc:
+            logger.exception("清理建议分析失败")
+            self.error.emit(str(exc))
+
+
 class ScanTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.scan_worker = None
+        self.post_worker = None
+        self.cleanup_worker = None
         self.file_dao = FileDAO(db)
         self.metadata_dao = MetadataDAO(db)
         self.scan_dao = ScanDirectoryDAO(db)
         self._watcher_mgr = WatcherManager.get_instance()
+        self._theme = 'dark'
         self._init_ui()
 
     def _init_ui(self):
@@ -44,7 +65,7 @@ class ScanTab(QWidget):
         dir_layout.addWidget(self.dir_label)
 
         self.path_label = QLabel("未选择目录")
-        self.path_label.setStyleSheet("color: #a6adc8; padding: 8px; background-color: #313244; border-radius: 6px;")
+        self.path_label.setObjectName("scanPathLabel")
         self.path_label.setMinimumWidth(400)
         dir_layout.addWidget(self.path_label, 1)
 
@@ -117,14 +138,14 @@ class ScanTab(QWidget):
 
         self.eta_label = QLabel("")
         self.eta_label.setObjectName("subtitleLabel")
-        self.eta_label.setStyleSheet("color: #89b4fa;")
+        self.eta_label.setObjectName("scanEtaLabel")
         self.eta_label.setVisible(False)
         layout.addWidget(self.eta_label)
 
         # 已配置扫描目录列表
-        dir_title = QLabel("已配置扫描目录")
-        dir_title.setStyleSheet("font-size: 15px; font-weight: bold; color: #cba6f7; margin-top: 10px;")
-        layout.addWidget(dir_title)
+        self.dir_title = QLabel("已配置扫描目录")
+        self.dir_title.setObjectName("scanDirectoryTitle")
+        layout.addWidget(self.dir_title)
 
         self.dir_table = QTableWidget()
         self.dir_table.setColumnCount(5)
@@ -169,6 +190,7 @@ class ScanTab(QWidget):
         self.scan_worker.progress_eta.connect(self._on_eta)
         self.scan_worker.finished.connect(self._on_scan_finished)
         self.scan_worker.error.connect(self._on_scan_error)
+        self.scan_worker.cancelled.connect(self._on_scan_cancelled)
         self.scan_worker.start()
 
         self.eta_label.setVisible(True)
@@ -176,60 +198,56 @@ class ScanTab(QWidget):
     def _cancel_scan(self):
         if self.scan_worker:
             self.scan_worker.cancel()
-            self.scan_btn.setEnabled(True)
             self.cancel_btn.setEnabled(False)
-            self.stats_label.setText("扫描已取消")
+            self.stats_label.setText("正在取消扫描...")
             self.eta_label.setVisible(False)
+
+    def _on_scan_cancelled(self):
+        self.scan_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
+        self.progress_bar.setVisible(False)
+        self.progress_label.setVisible(False)
+        self.eta_label.setVisible(False)
+        self.stats_label.setText("扫描已取消")
+        self.scan_worker = None
 
     def _show_cleanup_report(self):
         """分析数据库中的文件并展示清理建议报告"""
-        try:
-            self.cleanup_btn.setEnabled(False)
-            self.cleanup_btn.setText("分析中...")
+        if self.cleanup_worker and self.cleanup_worker.isRunning():
+            return
+        self.cleanup_btn.setEnabled(False)
+        self.cleanup_btn.setText("分析中...")
+        self.cleanup_worker = CleanupAnalysisWorker(self)
+        self.cleanup_worker.done.connect(self._on_cleanup_ready)
+        self.cleanup_worker.error.connect(self._on_cleanup_error)
+        self.cleanup_worker.start()
 
-            QApplication.processEvents()
+    def _on_cleanup_ready(self, report):
+        self._finish_cleanup_analysis()
+        if not report or not report.get('categories'):
+            QMessageBox.information(self, "清理建议", "未发现需要清理的文件，磁盘状况良好！")
+            return
+        lines = [
+            f"共 {report['total_active_files']} 个活跃文件，占用 {format_size(report['total_size'])}",
+            f"预计可释放约 {format_size(report['total_potential_savings'])} 空间\n",
+        ]
+        icons = {'high': '🔴', 'medium': '🟡', 'low': '🟢', 'info': '🔵'}
+        for category in report['categories']:
+            lines.extend((
+                f"{icons.get(category.get('severity', 'info'), '🔵')} {category.get('category', '未知')}",
+                f"   {category.get('description', '')}",
+                f"   建议: {category.get('action', '')}\n",
+            ))
+        QMessageBox.information(self, "磁盘清理建议报告", "\n".join(lines))
 
-            advisor = CleanupAdvisor(
-                file_dao=self.file_dao,
-                tag_dao=TagDAO(db),
-                cls_dao=ClassificationDAO(db),
-            )
-            report = advisor.analyze()
+    def _on_cleanup_error(self, error):
+        self._finish_cleanup_analysis()
+        QMessageBox.critical(self, "清理建议", f"分析失败: {error}")
 
-            if not report or not report['categories']:
-                QMessageBox.information(self, "清理建议", "未发现需要清理的文件，磁盘状况良好！")
-                return
-
-            # 构建报告
-            total_active = report['total_active_files']
-            total_size = format_size(report['total_size'])
-            total_savings = format_size(report['total_potential_savings'])
-
-            lines = [
-                f"共 {total_active} 个活跃文件，占用 {total_size}",
-                f"预计可释放约 {total_savings} 空间\n",
-            ]
-
-            severity_icons = {'high': '🔴', 'medium': '🟡', 'low': '🟢', 'info': '🔵'}
-            for cat in report['categories']:
-                icon = severity_icons.get(cat.get('severity', 'info'), '🔵')
-                category = cat.get('category', '未知')
-                desc = cat.get('description', '')
-                action = cat.get('action', '')
-                lines.append(f"{icon} {category}")
-                lines.append(f"   {desc}")
-                lines.append(f"   建议: {action}\n")
-
-            QMessageBox.information(
-                self, "磁盘清理建议报告",
-                "\n".join(lines))
-
-        except Exception as e:
-            logger.error(f"清理建议分析失败: {e}")
-            QMessageBox.critical(self, "清理建议", f"分析失败: {e}")
-        finally:
-            self.cleanup_btn.setEnabled(True)
-            self.cleanup_btn.setText("清理建议")
+    def _finish_cleanup_analysis(self):
+        self.cleanup_btn.setEnabled(True)
+        self.cleanup_btn.setText("清理建议")
+        self.cleanup_worker = None
 
     def _on_progress(self, current, total, path):
         self.progress_bar.setMaximum(total)
@@ -242,6 +260,7 @@ class ScanTab(QWidget):
         self.eta_label.setText(f"⏱ 预计剩余: {eta_str}")
 
     def _on_scan_finished(self, new_count, total):
+        self.scan_worker = None
         self.scan_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.progress_bar.setValue(self.progress_bar.maximum())
@@ -298,6 +317,7 @@ class ScanTab(QWidget):
         self.refresh_data()
 
     def _on_scan_error(self, error):
+        self.scan_worker = None
         self.scan_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.progress_bar.setVisible(False)
@@ -320,10 +340,7 @@ class ScanTab(QWidget):
 
                 del_btn = QPushButton("删除")
                 del_btn.setFixedSize(56, 24)
-                del_btn.setStyleSheet(
-                    "QPushButton { background-color: #f38ba8; color: #1e1e2e; "
-                    "border: none; border-radius: 4px; font-size: 11px; padding: 0 2px; }"
-                    "QPushButton:hover { background-color: #eba0ac; }")
+                del_btn.setObjectName("scanDeleteBtn")
                 del_btn.clicked.connect(lambda _, did=d['id']: self._delete_directory(did))
                 self.dir_table.setCellWidget(i, 4, del_btn)
 
@@ -373,7 +390,7 @@ class ScanTab(QWidget):
             # 给用户一个选择，而不是直接扫描
             notify(
                 self, 
-                f"检测到新文件，如需扫描请手动点击“开始扫描”",
+                f"检测到文件变化，如需同步请手动点击“开始扫描”",
                 'info', 
                 5000
             )

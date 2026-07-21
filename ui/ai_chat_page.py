@@ -320,7 +320,6 @@ class _ChatBubble(QFrame):
             "search_files": "📂",
             "search_web": "🌐",
             "read_file": "📄",
-            "execute_python": "🐍",
         }
         icon = icons.get(tool_name, "🔧")
         status = " ⚠️" if is_error else ""
@@ -755,7 +754,6 @@ class AiChatPage(QWidget):
             ("search_files", "📂 文件搜索", True),
             ("search_web", "🌐 联网搜索", True),
             ("read_file", "📄 读取文件", True),
-            ("execute_python", "🐍 代码执行", False),
         ]
         for tool_id, label, default in tools_info:
             cb = QCheckBox(label)
@@ -1356,7 +1354,7 @@ class AiChatPage(QWidget):
         if self._current_streaming_bubble:
             current = self._current_streaming_bubble._text_browser.toPlainText()
             if not current.strip() or current.strip() == "🤔 正在思考...":
-                icons = {"search_files": "📂", "search_web": "🌐", "read_file": "📄", "execute_python": "🐍"}
+                icons = {"search_files": "📂", "search_web": "🌐", "read_file": "📄"}
                 icon = icons.get(tool_name, "🔧")
                 self._current_streaming_bubble.set_text(
                     f"{icon} 正在调用工具: **{tool_name}**...\n\n请稍候..."
@@ -1517,7 +1515,7 @@ class AiChatPage(QWidget):
         """根据开关状态重新构建工具注册表"""
         from core.ai_tools import (
             ToolRegistry, create_search_files_tool, create_search_web_tool,
-            create_read_file_tool, create_execute_python_tool,
+            create_read_file_tool,
         )
 
         registry = ToolRegistry()
@@ -1527,9 +1525,7 @@ class AiChatPage(QWidget):
         if self._tool_checks.get("search_web", QCheckBox()).isChecked():
             registry.register(create_search_web_tool())
         if self._tool_checks.get("read_file", QCheckBox()).isChecked():
-            registry.register(create_read_file_tool())
-        if self._tool_checks.get("execute_python", QCheckBox()).isChecked():
-            registry.register(create_execute_python_tool())
+            registry.register(create_read_file_tool(db_manager=self.ai_layer.db_manager))
 
         self._tool_registry = registry
 

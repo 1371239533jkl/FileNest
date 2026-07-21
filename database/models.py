@@ -4,6 +4,7 @@ ponytail: 全部 %s→? 参数占位符、MySQL 特有语法翻译为 SQLite、F
 """
 from datetime import datetime
 from collections import defaultdict
+import re
 from typing import Optional, Any
 
 
@@ -49,9 +50,13 @@ class FileDAO:
             "SELECT * FROM files WHERE file_hash = ? AND status = 'active'", (file_hash,))
 
     def get_by_directory(self, directory: str) -> list:
+        normalized = directory.rstrip('/\\').replace('\\', '/')
+        escaped = normalized.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
         return self.db.execute_query(
-            "SELECT * FROM files WHERE file_path LIKE ? AND status = 'active'",
-            (directory.rstrip('/\\') + '%',))
+            """SELECT * FROM files WHERE status = 'active'
+               AND (REPLACE(file_path, '\\', '/') = ?
+                    OR REPLACE(file_path, '\\', '/') LIKE ? ESCAPE '\\')""",
+            (normalized, escaped + '/%',))
 
     def get_all_active(self) -> list:
         return self.db.execute_query(
@@ -96,9 +101,11 @@ class FileDAO:
         use_fts = False
 
         if name:
-            use_fts = True
-            conditions.append("files_fts MATCH ?")
-            params.append(f"{name}*")
+            tokens = re.findall(r"[\w\u4e00-\u9fff]+", name)
+            if tokens:
+                use_fts = True
+                conditions.append("files_fts MATCH ?")
+                params.append(" AND ".join(f'"{token}"*' for token in tokens[:10]))
         if file_type:
             conditions.append("f.file_type = ?")
             params.append(file_type)
