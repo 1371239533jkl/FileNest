@@ -5,7 +5,6 @@ AI 工具注册与执行系统 —— 让 LLM 自主调度多种工具完成复�
 - search_files  : 检索本地文件数据库（保留原有能力）
 - search_web    : 联网搜索，获取实时信息
 - read_file     : 读取本地文件内容
-- execute_python: 受限沙箱执行 Python 代码
 
 用法：
     registry = ToolRegistry()
@@ -16,9 +15,8 @@ AI 工具注册与执行系统 —— 让 LLM 自主调度多种工具完成复�
 
 import json
 import os
-import subprocess
-import tempfile
 import re
+from pathlib import Path
 from typing import Optional, Callable, Any
 from dataclasses import dataclass, field
 
@@ -460,9 +458,31 @@ def create_search_web_tool() -> ToolDefinition:
 # 预设工具：读取本地文件
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _read_file_handler(file_path: str, max_chars: int = 8000) -> str:
+def _get_allowed_read_roots(db_manager) -> list[Path]:
+    """Return canonical paths for explicitly enabled scan directories only."""
+    if db_manager is None:
+        return []
+    from database.models import ScanDirectoryDAO
+    return [Path(row['directory_path']).resolve()
+            for row in ScanDirectoryDAO(db_manager).get_active()
+            if row.get('directory_path')]
+
+
+def _read_file_handler(file_path: str, max_chars: int = 8000, _db=None) -> str:
     """读取本地文件内容 —— 智能识别类型：.docx/.pdf/.pptx 用专用库提取文本"""
-    # 安全检查：禁止读取系统敏感文件
+    max_chars = max(1, min(int(max_chars), 8000))
+    # The model may only read files from directories the user explicitly scanned.
+    try:
+        path = Path(file_path).resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        return f"[错误] 文件不存在或无法解析: {exc}"
+    if not path.is_file():
+        return f"[错误] 不是文件: {file_path}"
+    roots = _get_allowed_read_roots(_db)
+    if not roots or not any(path.is_relative_to(root) for root in roots):
+        return "[安全限制] 只允许读取已启用扫描目录中的文件"
+
+    # Defense in depth for credentials stored inside an otherwise allowed root.
     dangerous_patterns = [
         r'(^|[/\\])\.env$', r'/etc/(passwd|shadow)', r'\\Windows\\System32\\',
         r'\.pem$', r'\.key$', r'id_rsa', r'known_hosts',
@@ -471,13 +491,8 @@ def _read_file_handler(file_path: str, max_chars: int = 8000) -> str:
         if re.search(pattern, file_path, re.IGNORECASE):
             return f"[安全限制] 拒绝读取敏感文件: {file_path}"
 
-    if not os.path.exists(file_path):
-        return f"[错误] 文件不存在: {file_path}"
-
-    if not os.path.isfile(file_path):
-        return f"[错误] 不是文件: {file_path}"
-
-    file_size = os.path.getsize(file_path)
+    file_path = str(path)
+    file_size = path.stat().st_size
     size_str = _format_bytes(file_size)
     if file_size > 10 * 1024 * 1024:  # 超过 10MB 拒绝读取
         return f"[跳过] 文件过大 ({size_str})，拒绝读取内容"
@@ -591,105 +606,17 @@ _read_file_schema = {
 }
 
 
-def create_read_file_tool() -> ToolDefinition:
+def create_read_file_tool(db_manager=None) -> ToolDefinition:
     """创建文件读取工具"""
     return ToolDefinition(
         name="read_file",
         description="读取本地文件内容并提取文本。支持常见格式：.txt/.md/.py/.js 等文本文件、.docx Word文档、.pdf（含文字）、.pptx 演示文稿。图片/音视频等二进制文件会提示无法读取。",
         parameters=_read_file_schema,
-        handler=_read_file_handler,
+        handler=lambda **kwargs: _read_file_handler(**kwargs, _db=db_manager),
     )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 预设工具：Python 代码执行
-# ══════════════════════════════════════════════════════════════════════════════
-
-# 危险模块黑名单
-_FORBIDDEN_MODULES = {
-    "os", "subprocess", "sys", "shutil", "socket", "requests",
-    "httpx", "urllib", "http", "ftplib", "smtplib", "telnetlib",
-    "pickle", "marshal", "ctypes", "multiprocessing", "threading",
-    "signal", "pty", "fcntl", "posix", "grp", "pwd", "spwd",
-    "crypt", "ssl", "hashlib",
-}
-
-
-def _execute_python_handler(code: str, timeout: int = 10) -> str:
-    """在受限沙箱中执行 Python 代码"""
-    # 基础安全检查
-    code_lower = code.lower()
-    for mod in _FORBIDDEN_MODULES:
-        if f"import {mod}" in code_lower or f"from {mod}" in code_lower:
-            return f"[安全限制] 代码包含禁止模块: {mod}"
-
-    if "open(" in code and ("/etc/" in code or "C:\\Windows" in code):
-        return "[安全限制] 代码尝试访问系统目录"
-
-    # 写入临时文件执行
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".py", delete=False, encoding="utf-8"
-        ) as f:
-            f.write(code)
-            tmp_path = f.name
-
-        result = subprocess.run(
-            ["python", tmp_path],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=tempfile.gettempdir(),
-        )
-
-        output_parts = []
-        if result.stdout:
-            output_parts.append(f"[标准输出]\n{result.stdout.strip()}")
-        if result.stderr:
-            output_parts.append(f"[标准错误]\n{result.stderr.strip()}")
-        if not output_parts:
-            output_parts.append("[执行完毕，无输出]")
-
-        return "\n".join(output_parts)
-
-    except subprocess.TimeoutExpired:
-        return f"[超时] 代码执行超过 {timeout} 秒，已终止"
-    except Exception as e:
-        return f"[执行错误] {e}"
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
-
-
-_execute_python_schema = {
-    "type": "object",
-    "properties": {
-        "code": {
-            "type": "string",
-            "description": "要执行的 Python 代码。安全限制：禁止 import os/sys/subprocess/socket 等危险模块。"
-        },
-        "timeout": {
-            "type": "integer",
-            "description": "超时秒数，默认 10",
-            "default": 10
-        }
-    },
-    "required": ["code"]
-}
-
-
-def create_execute_python_tool() -> ToolDefinition:
-    """创建 Python 代码执行工具"""
-    return ToolDefinition(
-        name="execute_python",
-        description="在安全的沙箱环境中执行 Python 代码。适合做数据计算、格式转换、文本处理等简单任务。注意：禁止访问文件系统、网络和系统模块。",
-        parameters=_execute_python_schema,
-        handler=_execute_python_handler,
-    )
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # 工具函数
 # ══════════════════════════════════════════════════════════════════════════════
@@ -711,6 +638,5 @@ def create_default_registry(db_manager=None, ai_layer=None) -> ToolRegistry:
     registry = ToolRegistry()
     registry.register(create_search_files_tool(db_manager=db_manager, ai_layer=ai_layer))
     registry.register(create_search_web_tool())
-    registry.register(create_read_file_tool())
-    registry.register(create_execute_python_tool())
+    registry.register(create_read_file_tool(db_manager=db_manager))
     return registry

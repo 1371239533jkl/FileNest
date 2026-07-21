@@ -22,6 +22,8 @@ class DedupManager:
         """查找所有重复文件组（单次SQL查询）
         返回: {group_id: [file_records...]}
         """
+        db.execute_update(
+            "UPDATE files SET is_duplicate = 0, duplicate_group_id = NULL WHERE status = 'active'")
         all_dup_files = self.file_dao.get_all_duplicates()
         groups: Dict[int, List[dict]] = {}
         group_id = 0

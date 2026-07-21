@@ -99,16 +99,21 @@ class FileManager:
             logger.error(f"重命名文件失败: {old_path} -> {new_path}, 错误: {e}")
             raise RuntimeError(f"重命名失败: {e}") from e
 
-        # 更新数据库
-        self.file_dao.update_name(file_id, new_name, new_path)
-        if not record.get('original_name'):
-            db.execute_update(
-                "UPDATE files SET original_name = %s WHERE id = %s",
-                (old_name, file_id))
-
-        # 记录操作历史
-        op_id = self.history_dao.insert(
-            'rename', file_id, old_path, new_path, batch_id=batch_id)
+        try:
+            self.file_dao.update_name(file_id, new_name, new_path)
+            if not record.get('original_name'):
+                db.execute_update(
+                    "UPDATE files SET original_name = ? WHERE id = ?",
+                    (old_name, file_id))
+            op_id = self.history_dao.insert(
+                'rename', file_id, old_path, new_path, batch_id=batch_id)
+        except Exception:
+            # Do not leave the file system and database pointing at different paths.
+            try:
+                os.rename(new_path, old_path)
+            except OSError:
+                logger.exception("重命名后数据库更新失败，且无法回滚磁盘文件: %s", new_path)
+            raise
 
         logger.info(f"重命名: {old_name} -> {new_name}")
         return op_id
@@ -173,17 +178,16 @@ class FileManager:
             raise ValueError(f"文件记录不存在: id={file_id}")
 
         old_path = record['file_path']
-        trash_path = None
-        if os.path.exists(old_path):
-            try:
-                trash_path = _move_to_trash(old_path)
-            except Exception as e:
-                logger.warning(f"移至回收区失败: {old_path}, 错误: {e}")
-
-        self.file_dao.update_status(file_id, 'deleted')
-
-        op_id = self.history_dao.insert(
-            'delete', file_id, old_path, trash_path, batch_id=batch_id)
+        if not os.path.isfile(old_path):
+            raise FileNotFoundError(f"文件不存在: {old_path}")
+        trash_path = _move_to_trash(old_path)
+        try:
+            self.file_dao.update_status(file_id, 'deleted')
+            op_id = self.history_dao.insert(
+                'delete', file_id, old_path, trash_path, batch_id=batch_id)
+        except Exception:
+            _restore_from_trash(trash_path, old_path)
+            raise
 
         logger.info(f"删除（进回收区）: {old_path} -> {trash_path}")
         return op_id
@@ -201,9 +205,9 @@ class FileManager:
             try:
                 os.remove(file_path)
                 logger.info(f"已从磁盘删除: {file_path}")
-            except Exception as e:
-                logger.warning(f"磁盘文件删除失败: {file_path}, 错误: {e}")
-                # 即使磁盘删除失败，也继续从数据库中移除记录
+            except OSError as e:
+                logger.error(f"磁盘文件删除失败: {file_path}, 错误: {e}")
+                raise RuntimeError(f"永久删除失败，已保留数据库记录: {e}") from e
 
         # 从数据库中彻底删除记录（包括关联的元数据、分类、历史）
         self.file_dao.delete_record(file_id)

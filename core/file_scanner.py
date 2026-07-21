@@ -113,6 +113,7 @@ class FileScanWorker(QThread):
     progress = pyqtSignal(int, int, str)  # current, total, path
     progress_eta = pyqtSignal(str)  # ETA 字符串
     finished = pyqtSignal(int, int)  # new_count, total_count
+    cancelled = pyqtSignal()
     error = pyqtSignal(str)
 
     def __init__(self, directory: str, recursive: bool = True,
@@ -145,6 +146,7 @@ class FileScanWorker(QThread):
                 for dirpath, dirnames, filenames in os.walk(
                         self.directory, onerror=_onerror):
                     if self._cancelled:
+                        self.cancelled.emit()
                         return
 
                     # Windows: 过滤 NTFS 交接点/重解析点，防止无限循环
@@ -170,6 +172,7 @@ class FileScanWorker(QThread):
                     with os.scandir(self.directory) as it:
                         for entry in it:
                             if self._cancelled:
+                                self.cancelled.emit()
                                 return
                             if entry.is_file():
                                 fp = entry.path
@@ -182,6 +185,7 @@ class FileScanWorker(QThread):
                     return
 
             total = len(all_files)
+            seen_paths = set(all_files)
             new_count = 0
             start_time = time.time()  # 记录扫描开始时间
 
@@ -197,6 +201,7 @@ class FileScanWorker(QThread):
 
             for i, fp in enumerate(all_files):
                 if self._cancelled:
+                    self.cancelled.emit()
                     return
                 self.progress.emit(i + 1, total, fp)
 
@@ -238,13 +243,18 @@ class FileScanWorker(QThread):
                     info['file_hash'] = calculate_hash(fp)
 
                 if existing:
-                    # 更新已有记录
-                    file_dao.update_status(existing['id'], 'active')
-                    if info.get('file_hash'):
-                        file_dao.update_hash(existing['id'], info['file_hash'])
+                    # Upsert all changed fields; updating only the hash leaves stale size/type/name data.
+                    file_dao.insert(info)
                 else:
                     file_dao.insert(info)
                     new_count += 1
+
+            # A completed scan is authoritative for this directory.  Do not run
+            # this on cancellation, otherwise a partial scan would hide files.
+            if not preload_failed:
+                for path, record in existing_paths.items():
+                    if path not in seen_paths and not os.path.exists(path):
+                        file_dao.update_status(record['id'], 'deleted')
 
             # 更新扫描目录信息
             if not scan_dao.exists(self.directory):
