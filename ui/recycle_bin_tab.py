@@ -82,7 +82,8 @@ class RecycleBinTab(QWidget):
         layout.addWidget(self.table, 1)
 
         # 空状态引导
-        self._empty_state = create_empty_state('recycle_bin', parent=self)
+        self._empty_state = create_empty_state(
+            'recycle_bin', "重试加载", self.refresh_data, parent=self)
         layout.addWidget(self._empty_state)
 
         # ── 分页 ──
@@ -152,6 +153,8 @@ class RecycleBinTab(QWidget):
             self._populate_table(files)
         except Exception as e:
             logger.error(f"加载回收区数据失败: {e}")
+            self.table.setVisible(False)
+            self._empty_state.show_error(f"无法读取回收区：{e}")
 
     def _populate_table(self, files):
         total_pages = max(
@@ -163,7 +166,10 @@ class RecycleBinTab(QWidget):
         self.count_label.setText(f"共 {self._total_count} 个文件")
 
         # 空状态检测
-        self._empty_state.setVisible(len(files) == 0)
+        if files:
+            self._empty_state.setVisible(False)
+        else:
+            self._empty_state.show_empty()
         self.table.setVisible(len(files) > 0)
 
         total_size = sum(f.get('file_size', 0) for f in files)
@@ -245,8 +251,21 @@ class RecycleBinTab(QWidget):
 
     def _restore_single(self, file_id: int):
         try:
-            self.file_mgr.restore_file(file_id)
-            notify(self, "文件已恢复到原路径", 'success', 3000)
+            preview = self.file_mgr.get_restore_preview(file_id)
+            strategy = 'error'
+            if preview['conflict']:
+                box = QMessageBox(self)
+                box.setWindowTitle("原路径冲突")
+                box.setText("原路径已有同名文件。为避免覆盖，不能直接恢复。")
+                rename_btn = box.addButton("自动重命名恢复", QMessageBox.ButtonRole.AcceptRole)
+                box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+                box.exec()
+                if box.clickedButton() is not rename_btn:
+                    return
+                strategy = 'rename'
+            restored_path = self.file_mgr.restore_file(file_id, strategy)
+            message = "文件已恢复到原路径" if strategy == 'error' else f"已恢复为: {os.path.basename(restored_path)}"
+            notify(self, message, 'success', 3000)
             self.refresh_data()
         except FileNotFoundError as e:
             QMessageBox.warning(self, "恢复失败", str(e))
@@ -289,17 +308,34 @@ class RecycleBinTab(QWidget):
         if not ids:
             QMessageBox.information(self, "提示", "请先选择要恢复的文件")
             return
-        reply = QMessageBox.question(
-            self, "确认恢复",
-            f"确定要恢复选中的 {len(ids)} 个文件到原路径？")
-        if reply != QMessageBox.StandardButton.Yes:
+        previews, preflight_errors = [], []
+        for file_id in ids:
+            try:
+                previews.append(self.file_mgr.get_restore_preview(file_id))
+            except Exception as exc:
+                preflight_errors.append(f"ID {file_id}: {exc}")
+
+        conflicts = sum(1 for item in previews if item['conflict'])
+        box = QMessageBox(self)
+        box.setWindowTitle("确认批量恢复")
+        box.setText(
+            f"准备恢复 {len(previews)} 个文件。"
+            + (f"\n其中 {conflicts} 个原路径已被占用。" if conflicts else ""))
+        if conflicts:
+            restore_btn = box.addButton("冲突项自动重命名恢复", QMessageBox.ButtonRole.AcceptRole)
+        else:
+            restore_btn = box.addButton("恢复到原路径", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is not restore_btn:
             return
 
-        success, failed = 0, 0
-        errors = []
-        for fid in ids:
+        success, failed = 0, len(preflight_errors)
+        errors = list(preflight_errors)
+        for item in previews:
             try:
-                self.file_mgr.restore_file(fid)
+                self.file_mgr.restore_file(
+                    item['file_id'], 'rename' if item['conflict'] else 'error')
                 success += 1
             except Exception as e:
                 failed += 1
@@ -311,6 +347,7 @@ class RecycleBinTab(QWidget):
         notify(self, msg, 'success' if failed == 0 else 'warning', 4000)
         if errors:
             logger.warning(f"批量恢复错误: {errors[:3]}")
+            QMessageBox.warning(self, "部分恢复失败", "\n".join(errors[:5]))
         self.refresh_data()
 
     def _purge_selected(self):

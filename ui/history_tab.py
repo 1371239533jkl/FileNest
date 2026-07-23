@@ -108,7 +108,8 @@ class HistoryTab(QWidget):
         layout.addWidget(self.history_table, 1)
 
         # 空状态引导
-        self._empty_state = create_empty_state('history', parent=self)
+        self._empty_state = create_empty_state(
+            'history', "重试加载", self.refresh_data, parent=self)
         layout.addWidget(self._empty_state)
 
         # 底部操作
@@ -152,18 +153,29 @@ class HistoryTab(QWidget):
             self._populate_table(records)
         except Exception as e:
             logger.error(f"加载操作历史失败: {e}")
+            self.history_table.setVisible(False)
+            self._empty_state.show_error(f"无法读取操作历史：{e}")
 
     def _populate_table(self, records):
         self.history_table.setRowCount(len(records))
         self.count_label.setText(f"共 {len(records)} 条记录")
 
         # 空状态检测
-        self._empty_state.setVisible(len(records) == 0)
+        if records:
+            self._empty_state.setVisible(False)
+        else:
+            self._empty_state.show_empty()
         self.history_table.setVisible(len(records) > 0)
+        batch_counts = {}
+        for record in records:
+            batch_id = record.get('batch_id')
+            if batch_id:
+                batch_counts[batch_id] = batch_counts.get(batch_id, 0) + 1
 
         for i, r in enumerate(records):
-            self.history_table.setItem(i, 0, QTableWidgetItem(
-                str(r['operation_time']) if r['operation_time'] else ""))
+            time_item = QTableWidgetItem(str(r['operation_time']) if r['operation_time'] else "")
+            time_item.setData(Qt.ItemDataRole.UserRole, r['id'])
+            self.history_table.setItem(i, 0, time_item)
             op_icon = OPERATION_ICONS.get(r['operation_type'], ' ')
             self.history_table.setItem(i, 1, QTableWidgetItem(
                 op_icon + " " + OPERATION_NAMES.get(r['operation_type'], r['operation_type'])))
@@ -186,10 +198,15 @@ class HistoryTab(QWidget):
                 status_item.setForeground(QBrush(QColor('#a6e3a1')))
             elif r['operation_status'] == 'undone':
                 status_item.setForeground(QBrush(QColor('#f9e2af')))
+            if r.get('error_message'):
+                status_item.setToolTip(r['error_message'])
             self.history_table.setItem(i, 5, status_item)
 
-            self.history_table.setItem(i, 6, QTableWidgetItem(
-                r.get('batch_id', '') or '-'))
+            batch_id = r.get('batch_id', '') or ''
+            batch_text = f"{batch_id}（{batch_counts[batch_id]} 项）" if batch_id else '-'
+            batch_item = QTableWidgetItem(batch_text)
+            batch_item.setData(Qt.ItemDataRole.UserRole, batch_id)
+            self.history_table.setItem(i, 6, batch_item)
 
             # 撤销按钮
             if r.get('undo_available') and r['operation_status'] == 'completed':
@@ -225,20 +242,22 @@ class HistoryTab(QWidget):
             return
 
         success = 0
+        errors = []
         for row in sorted(rows, reverse=True):
-            op_id_item = self.history_table.item(row, 2)
             time_item = self.history_table.item(row, 0)
-            # 通过历史记录查找
             try:
-                # 获取操作id - 重新查询
-                records = self.history_mgr.search_operations()
-                if row < len(records):
-                    self.history_mgr.undo_operation(records[row]['id'])
+                op_id = time_item.data(Qt.ItemDataRole.UserRole) if time_item else None
+                if op_id:
+                    self.history_mgr.undo_operation(op_id)
                     success += 1
             except Exception as e:
                 logger.warning(f"撤销失败: {e}")
+                errors.append(str(e))
 
-        QMessageBox.information(self, "批量撤销", f"成功撤销 {success} 条操作")
+        message = f"成功撤销 {success} 条操作"
+        if errors:
+            message += f"\n失败 {len(errors)} 条：\n" + "\n".join(errors[:5])
+        QMessageBox.information(self, "批量撤销", message)
         self.refresh_data()
 
     def _undo_batch(self):
@@ -251,8 +270,9 @@ class HistoryTab(QWidget):
         batch_ids = set()
         for row in rows:
             item = self.history_table.item(row, 6)
-            if item and item.text() and item.text() != '-':
-                batch_ids.add(item.text())
+            batch_id = item.data(Qt.ItemDataRole.UserRole) if item else None
+            if batch_id:
+                batch_ids.add(batch_id)
 
         if not batch_ids:
             QMessageBox.information(self, "提示", "选中的记录没有关联的批次")

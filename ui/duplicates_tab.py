@@ -10,6 +10,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QBrush
 
 from core import FileManager
+from core.dedup_manager import DedupManager
 from database.db_manager import db
 from database.models import FileDAO
 from utils.display_utils import format_size, truncate_path, get_file_icon
@@ -25,6 +26,7 @@ class DuplicatesTab(QWidget):
         super().__init__(parent)
         self.file_dao = FileDAO(db)
         self.file_mgr = FileManager()
+        self.dedup_mgr = DedupManager()
         self.page_size = 50
         self.current_page = 0
         self._total_groups = 0
@@ -93,7 +95,8 @@ class DuplicatesTab(QWidget):
         layout.addWidget(splitter, 1)
 
         # 空状态引导
-        self._empty_state = create_empty_state('duplicates', parent=self)
+        self._empty_state = create_empty_state(
+            'duplicates', "重试加载", self.refresh_data, parent=self)
         layout.addWidget(self._empty_state)
 
         # 分页 + 操作
@@ -128,6 +131,11 @@ class DuplicatesTab(QWidget):
         )
         bottom.addWidget(self.ai_select_btn)
 
+        self.keep_newest_btn = QPushButton("保留最新副本")
+        self.keep_newest_btn.setToolTip("按修改时间保留最新文件，其余副本移入回收区")
+        self.keep_newest_btn.clicked.connect(self._keep_newest_in_group)
+        bottom.addWidget(self.keep_newest_btn)
+
         refresh_btn = QPushButton("刷新")
         refresh_btn.clicked.connect(self.refresh_data)
         bottom.addWidget(refresh_btn)
@@ -150,11 +158,39 @@ class DuplicatesTab(QWidget):
             return
         self._ai_smart_select(file_hash, files)
 
+    def _keep_newest_in_group(self):
+        rows = self.group_table.selectionModel().selectedRows()
+        if not rows:
+            notify(self, "请先选择一个重复文件组", 'info', 3000)
+            return
+        item = self.group_table.item(rows[0].row(), 0)
+        if not item:
+            return
+        file_hash = item.data(Qt.ItemDataRole.UserRole)
+        files = self.file_dao.get_duplicate_group_files(file_hash)
+        keep_id, remove_ids = self.dedup_mgr.suggest_keep(files, 'keep_newest')
+        keep = next((file for file in files if file['id'] == keep_id), None)
+        if not keep or not remove_ids:
+            return
+        reply = QMessageBox.question(
+            self, "确认清理重复文件",
+            f"将保留最新副本：\n{keep['file_name']}\n\n"
+            f"其余 {len(remove_ids)} 个副本将移入回收区，预计释放 "
+            f"{format_size(sum(file.get('file_size', 0) for file in files if file['id'] in remove_ids))}。\n\n确定继续？")
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        _batch_id, removed = self.dedup_mgr.remove_duplicates(0, keep_id, remove_ids)
+        notify(self, f"重复文件清理完成：保留 1 个，移入回收区 {removed} 个", 'success', 4000)
+        self.refresh_data()
+
     def refresh_data(self):
         try:
             self._load_groups()
         except Exception as e:
             logger.error(f"加载重复文件失败: {e}")
+            self.group_table.setVisible(False)
+            self.detail_table.setVisible(False)
+            self._empty_state.show_error(f"无法分析重复文件：{e}")
 
     def _load_groups(self):
         self._total_groups = self.file_dao.count_duplicate_groups()
@@ -164,8 +200,15 @@ class DuplicatesTab(QWidget):
 
         # 空状态检测
         is_empty = self._total_groups == 0
-        self._empty_state.setVisible(is_empty)
         if is_empty:
+            self._empty_state.show_empty()
+        else:
+            self._empty_state.setVisible(False)
+            self.group_table.setVisible(True)
+            self.detail_table.setVisible(True)
+        if is_empty:
+            self.group_table.setVisible(False)
+            self.detail_table.setVisible(False)
             self.group_table.setRowCount(0)
             self.detail_table.setRowCount(0)
             self.page_label.setText("第 0 页 / 共 0 页")

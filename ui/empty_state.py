@@ -15,6 +15,7 @@ class EmptyStateWidget(QWidget):
     def __init__(self, icon: str, title: str, description: str,
                  action_text: str = None, action_callback=None, parent=None):
         super().__init__(parent)
+        self._empty_content = (icon, title, description)
         self._init_ui(icon, title, description, action_text, action_callback)
     
     def _init_ui(self, icon: str, title: str, description: str,
@@ -24,39 +25,72 @@ class EmptyStateWidget(QWidget):
         layout.setSpacing(16)
         
         # 图标
-        icon_label = QLabel(icon)
-        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon_label.setStyleSheet("font-size: 48px; background: transparent; border: none;")
-        layout.addWidget(icon_label)
+        self.icon_label = QLabel(icon)
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.icon_label.setStyleSheet("font-size: 48px; background: transparent; border: none;")
+        layout.addWidget(self.icon_label)
         
         # 标题
-        title_label = QLabel(title)
-        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_label.setStyleSheet(
-            "font-size: 18px; font-weight: bold; color: #cdd6f4; "
+        self.title_label = QLabel(title)
+        self.title_label.setObjectName("emptyStateTitle")
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.title_label.setStyleSheet(
+            "font-size: 18px; font-weight: bold; "
             "background: transparent; border: none;")
-        layout.addWidget(title_label)
+        layout.addWidget(self.title_label)
         
         # 描述
-        desc_label = QLabel(description)
-        desc_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        desc_label.setWordWrap(True)
-        desc_label.setStyleSheet(
-            "font-size: 13px; color: #a6adc8; "
+        self.desc_label = QLabel(description)
+        self.desc_label.setObjectName("emptyStateDescription")
+        self.desc_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.desc_label.setWordWrap(True)
+        self.desc_label.setStyleSheet(
+            "font-size: 13px; "
             "background: transparent; border: none;")
-        layout.addWidget(desc_label)
+        layout.addWidget(self.desc_label)
         
         # 操作按钮（可选）
         if action_text and action_callback:
-            btn = QPushButton(action_text)
-            btn.setObjectName("primaryBtn")
-            btn.setFixedWidth(160)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.clicked.connect(action_callback)
-            layout.addWidget(btn, alignment=Qt.AlignmentFlag.AlignCenter)
+            self.action_btn = QPushButton(action_text)
+            self.action_btn.setObjectName("primaryBtn")
+            self.action_btn.setFixedWidth(160)
+            self.action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.action_btn.clicked.connect(action_callback)
+            layout.addWidget(self.action_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+        else:
+            self.action_btn = None
         
         layout.addStretch()
         self.setVisible(False)
+
+    def set_content(self, icon: str, title: str, description: str):
+        """Reuse the same panel for empty, loading and error states."""
+        self.icon_label.setText(icon)
+        self.title_label.setText(title)
+        self.desc_label.setText(description)
+
+    def show_loading(self, description: str = "正在加载，请稍候..."):
+        self.set_content("…", "正在加载", description)
+        if self.action_btn:
+            self.action_btn.setVisible(False)
+        self.setVisible(True)
+
+    def show_error(self, description: str):
+        self.set_content("!", "加载失败", description)
+        if self.action_btn:
+            self.action_btn.setVisible(True)
+        self.setVisible(True)
+
+    def show_empty(self, icon: str = None, title: str = None,
+                   description: str = None):
+        default_icon, default_title, default_description = self._empty_content
+        self.set_content(
+            icon or default_icon,
+            title or default_title,
+            description or default_description)
+        if self.action_btn:
+            self.action_btn.setVisible(True)
+        self.setVisible(True)
 
 
 # 预定义的空状态配置
