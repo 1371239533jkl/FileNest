@@ -230,6 +230,12 @@ class DBManager:
                 content_rowid='id',
                 tokenize='unicode61'
             );
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS file_content_fts USING fts5(
+                file_id UNINDEXED,
+                content,
+                tokenize='unicode61'
+            );
         """)
         conn.commit()
 
