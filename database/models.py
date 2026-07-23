@@ -89,7 +89,9 @@ class FileDAO:
         self.db.execute_update("DELETE FROM file_metadata WHERE file_id = ?", (file_id,))
         self.db.execute_update("DELETE FROM file_classifications WHERE file_id = ?", (file_id,))
         self.db.execute_update("DELETE FROM operation_history WHERE file_id = ?", (file_id,))
+        self.db.execute_update("DELETE FROM file_content_fts WHERE file_id = ?", (str(file_id),))
         return self.db.execute_update("DELETE FROM files WHERE id = ?", (file_id,))
+
 
     def _build_search_conditions(self, name=None, file_type=None, extension=None,
                                   min_size=None, max_size=None, start_date=None,
@@ -255,14 +257,17 @@ class FileDAO:
         return self.db.execute_query(sql)
 
     def get_top_directories(self, limit: int = 10) -> list:
-        """按目录统计文件总大小（取 Top N）。
-        ponytail: SQLite 无 SUBSTRING_INDEX，改为 Python 端路径切分聚合。"""
+        """按文件实际父目录统计总大小（取 Top N）。"""
         rows = self.db.execute_query(
             "SELECT file_path, file_size FROM files WHERE status = 'active'")
         dir_stats = defaultdict(lambda: {'count': 0, 'total_size': 0})
         for row in rows:
-            parts = row['file_path'].replace('\\', '/').split('/')
-            dir_path = '/'.join(parts[:4])
+            # Do not aggregate by a fixed path depth: Windows user paths share
+            # a long prefix, which otherwise hides the directories consuming space.
+            normalized = (row.get('file_path') or '').replace('\\', '/').rstrip('/')
+            dir_path = normalized.rsplit('/', 1)[0] if '/' in normalized else '根目录'
+            if not dir_path:
+                dir_path = '根目录'
             dir_stats[dir_path]['count'] += 1
             dir_stats[dir_path]['total_size'] += (row['file_size'] or 0)
         result = sorted(
@@ -323,6 +328,34 @@ class FileDAO:
     def delete_by_path(self, file_path: str) -> int:
         return self.db.execute_update(
             "UPDATE files SET status = 'deleted' WHERE file_path = ?", (file_path,))
+
+
+class FileContentDAO:
+    """Local extracted-text index, kept separate from file metadata FTS."""
+
+    def __init__(self, db):
+        self.db = db
+
+    def upsert(self, file_id: int, content: str) -> None:
+        self.db.execute_update("DELETE FROM file_content_fts WHERE file_id = ?", (str(file_id),))
+        self.db.execute_insert(
+            "INSERT INTO file_content_fts (file_id, content) VALUES (?, ?)",
+            (str(file_id), content))
+
+    def search(self, query: str, limit: int = 100) -> list:
+        tokens = re.findall(r"[\w\u4e00-\u9fff]+", query or '')
+        if not tokens:
+            return []
+        match = " AND ".join(f'"{token}"*' for token in tokens[:10])
+        return self.db.execute_query(
+            "SELECT f.*, snippet(file_content_fts, 1, '[', ']', '...', 18) AS content_snippet "
+            "FROM file_content_fts JOIN files f ON CAST(file_content_fts.file_id AS INTEGER)=f.id "
+            "WHERE file_content_fts MATCH ? AND f.status='active' "
+            "ORDER BY rank LIMIT ?", (match, limit))
+
+    def count(self) -> int:
+        row = self.db.execute_one("SELECT COUNT(*) AS total FROM file_content_fts")
+        return row['total'] if row else 0
 
 
 class MetadataDAO:
@@ -436,7 +469,8 @@ class OperationHistoryDAO:
             (operation_type, operation_time, file_id, old_value, new_value,
              operation_status, undo_available, error_message, batch_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"""
-        undo = 1 if status == 'completed' and op_type in ('rename', 'move', 'delete', 'classify') else 0
+        undo = 1 if status == 'completed' and op_type in (
+            'rename', 'move', 'delete', 'dedup', 'classify') else 0
         return self.db.execute_insert(sql, (
             op_type, datetime.now(), file_id, old_value, new_value,
             status, undo, error_msg, batch_id
@@ -707,6 +741,32 @@ class TagDAO:
         total += self.db.execute_update(
             "DELETE FROM tags WHERE tag_name = ?", (tag_name.strip(),))
         return total
+
+    def merge_tag(self, source_name: str, target_name: str) -> int:
+        """Merge source associations into target without duplicate links."""
+        source = source_name.strip()
+        target = target_name.strip()
+        if not source or not target:
+            raise ValueError('标签名不能为空')
+        if source == target:
+            raise ValueError('源标签和目标标签不能相同')
+        conn = self.db.get_connection()
+        try:
+            conn.execute('BEGIN')
+            conn.execute(
+                "INSERT OR IGNORE INTO tags (tag_name, create_time) VALUES (?, ?)",
+                (target, datetime.now()))
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO file_tags (file_id, tag_name, create_time) "
+                "SELECT file_id, ?, create_time FROM file_tags WHERE tag_name = ?",
+                (target, source))
+            conn.execute("DELETE FROM file_tags WHERE tag_name = ?", (source,))
+            conn.execute("DELETE FROM tags WHERE tag_name = ?", (source,))
+            conn.commit()
+            return cursor.rowcount
+        except Exception:
+            conn.rollback()
+            raise
 
     def batch_add_tags(self, file_ids: list, tag_names: list) -> int:
         if not file_ids or not tag_names:

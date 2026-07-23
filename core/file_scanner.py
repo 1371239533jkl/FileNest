@@ -115,6 +115,8 @@ class FileScanWorker(QThread):
     finished = pyqtSignal(int, int)  # new_count, total_count
     cancelled = pyqtSignal()
     error = pyqtSignal(str)
+    issue = pyqtSignal(str, str)  # path, reason
+    report = pyqtSignal(dict)
 
     def __init__(self, directory: str, recursive: bool = True,
                  compute_hash: bool = True, parent=None):
@@ -141,6 +143,8 @@ class FileScanWorker(QThread):
             if self.recursive:
                 def _onerror(err):
                     logger.warning(f"跳过无法访问的目录: {err}")
+                    self.issue.emit(getattr(err, 'filename', self.directory) or self.directory,
+                                    str(err))
 
                 dir_count = 0
                 for dirpath, dirnames, filenames in os.walk(
@@ -181,12 +185,15 @@ class FileScanWorker(QThread):
                                 all_files.append(fp)
                 except OSError as e:
                     logger.error(f"无法访问目录: {self.directory} - {e}")
+                    self.issue.emit(self.directory, str(e))
                     self.error.emit(f"无法访问目录: {e}")
                     return
 
             total = len(all_files)
             seen_paths = set(all_files)
             new_count = 0
+            updated_count = 0
+            skipped_count = 0
             start_time = time.time()  # 记录扫描开始时间
 
             # 预加载该目录下已有文件记录（字典键为 file_path），避免 N+1 查询
@@ -228,14 +235,18 @@ class FileScanWorker(QThread):
                         stat = os.stat(fp)
                         db_mtime = existing.get('modify_time')
                         if db_mtime and datetime.fromtimestamp(stat.st_mtime) <= db_mtime:
+                            skipped_count += 1
                             continue
                     except OSError:
+                        skipped_count += 1
                         continue
 
                 try:
                     info = get_file_info(fp)
                 except (OSError, PermissionError) as e:
                     logger.warning(f"跳过文件: {fp} - {e}")
+                    skipped_count += 1
+                    self.issue.emit(fp, str(e))
                     continue
 
                 # 计算哈希
@@ -245,6 +256,7 @@ class FileScanWorker(QThread):
                 if existing:
                     # Upsert all changed fields; updating only the hash leaves stale size/type/name data.
                     file_dao.insert(info)
+                    updated_count += 1
                 else:
                     file_dao.insert(info)
                     new_count += 1
@@ -265,6 +277,13 @@ class FileScanWorker(QThread):
                     scan_dao.update_scan_time(d['id'], total)
                     break
 
+            self.report.emit({
+                'directory': self.directory,
+                'total': total,
+                'new': new_count,
+                'updated': updated_count,
+                'skipped': skipped_count,
+            })
             self.finished.emit(new_count, total)
             logger.info(f"扫描完成: {self.directory}, 新文件: {new_count}, 总计: {total}")
         except Exception as e:

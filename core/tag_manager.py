@@ -76,3 +76,7 @@ class TagManager:
         except Exception as e:
             logger.warning(f"删除标签失败: {e}")
             return False
+
+    def merge_tag(self, source_name: str, target_name: str) -> int:
+        """Merge source tag into target and return newly created links."""
+        return self.tag_dao.merge_tag(source_name, target_name)

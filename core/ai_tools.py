@@ -3,6 +3,7 @@ AI 工具注册与执行系统 —— 让 LLM 自主调度多种工具完成复�
 
 支持的预设工具：
 - search_files  : 检索本地文件数据库（保留原有能力）
+- search_content: 检索已建立索引的本地文档正文，并返回来源片段
 - search_web    : 联网搜索，获取实时信息
 - read_file     : 读取本地文件内容
 
@@ -235,6 +236,72 @@ def create_search_files_tool(db_manager=None, ai_layer=None) -> ToolDefinition:
         description="搜索本地文件数据库。当你需要查找用户电脑上的文件时使用此工具。支持按文件名、路径关键词搜索，可按文件类型过滤。",
         parameters=_search_files_schema,
         handler=handler,
+        requires_db=True,
+        db_manager=db_manager,
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 预设工具：已索引正文检索
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _search_content_handler(query: str, max_results: int = 8, _db=None) -> str:
+    """Search only the local extracted-text index and return cited snippets."""
+    if _db is None:
+        return "[错误] 正文检索工具未连接数据库"
+    query = (query or '').strip()
+    if not query:
+        return "[错误] 请提供需要检索的正文关键词"
+
+    try:
+        from database.models import FileContentDAO
+
+        limit = max(1, min(int(max_results or 8), 20))
+        rows = FileContentDAO(_db).search(query, limit=limit)
+        if not rows:
+            return ("未在已建立正文索引的文件中找到匹配内容。"
+                    "可提醒用户先在搜索页或扫描页执行“构建正文索引”。")
+
+        lines = [f"正文检索“{query}”命中 {len(rows)} 个文件。回答时请引用 [来源 N]："]
+        for index, row in enumerate(rows, 1):
+            snippet = (row.get('content_snippet') or '').replace('\n', ' ').strip()
+            lines.append(
+                f"[来源 {index}] {row.get('file_name', '未知文件')} | "
+                f"路径: {row.get('file_path', '')} | 摘录: {snippet}"
+            )
+        return "\n".join(lines)
+    except (TypeError, ValueError) as exc:
+        return f"[正文检索错误] 参数无效: {exc}"
+    except Exception as exc:
+        logger.error(f"正文检索失败: {exc}")
+        return f"[正文检索错误] {exc}"
+
+
+_search_content_schema = {
+    "type": "object",
+    "properties": {
+        "query": {
+            "type": "string",
+            "description": "要在已索引文档正文中查找的关键词或短语。"
+        },
+        "max_results": {
+            "type": "integer",
+            "description": "最多返回的来源数量，默认 8，最大 20。",
+            "default": 8,
+        },
+    },
+    "required": ["query"],
+}
+
+
+def create_search_content_tool(db_manager=None) -> ToolDefinition:
+    """Create a read-only local content-search tool with source citations."""
+    return ToolDefinition(
+        name="search_content",
+        description=("检索用户已建立索引的本地文档正文。适合回答文档中提到什么、"
+                     "查找某个术语或根据文档内容归纳时使用。结果包含可追溯的文件来源和摘录。"),
+        parameters=_search_content_schema,
+        handler=lambda **kwargs: _search_content_handler(**kwargs, _db=db_manager),
         requires_db=True,
         db_manager=db_manager,
     )
@@ -637,6 +704,7 @@ def create_default_registry(db_manager=None, ai_layer=None) -> ToolRegistry:
     """创建包含所有预设工具的注册表"""
     registry = ToolRegistry()
     registry.register(create_search_files_tool(db_manager=db_manager, ai_layer=ai_layer))
+    registry.register(create_search_content_tool(db_manager=db_manager))
     registry.register(create_search_web_tool())
     registry.register(create_read_file_tool(db_manager=db_manager))
     return registry
