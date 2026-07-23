@@ -20,6 +20,7 @@ class BatchClassifyWorker(QThread):
     """
     progress = pyqtSignal(int, int)   # current, total
     finished = pyqtSignal(int)        # classified_count
+    cancelled = pyqtSignal()
     error = pyqtSignal(str)
 
     def __init__(self, classifier=None, do_metadata: bool = False, parent=None):
@@ -43,7 +44,8 @@ class BatchClassifyWorker(QThread):
 
             for i, record in enumerate(files):
                 if self._cancelled:
-                    break
+                    self.cancelled.emit()
+                    return
 
                 file_id = record['id']
                 try:
