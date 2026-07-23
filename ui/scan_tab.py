@@ -20,6 +20,9 @@ from utils.display_utils import truncate_path, format_size
 from utils.logger import logger
 from ui.toast import notify
 from ui.empty_state import create_empty_state
+from ui.task_center import TaskCenterDialog
+from core.task_manager import TaskManager
+from core.index_health import IndexHealthService
 
 
 class CleanupAnalysisWorker(QThread):
@@ -143,6 +146,16 @@ class ScanTab(QWidget):
         self.cleanup_btn.clicked.connect(self._show_cleanup_report)
         btn_layout.addWidget(self.cleanup_btn)
 
+        self.task_center_btn = QPushButton('任务中心')
+        self.task_center_btn.setToolTip('查看后台扫描、索引和分析任务的状态')
+        self.task_center_btn.clicked.connect(self._show_task_center)
+        btn_layout.addWidget(self.task_center_btn)
+
+        self.health_btn = QPushButton('索引检查')
+        self.health_btn.setToolTip('检查不存在的索引路径和孤立正文索引，可在确认后安全修复')
+        self.health_btn.clicked.connect(self._check_index_health)
+        btn_layout.addWidget(self.health_btn)
+
         btn_layout.addStretch()
 
         self.stats_label = QLabel("")
@@ -242,6 +255,7 @@ class ScanTab(QWidget):
         self.scan_worker.cancelled.connect(self._on_scan_cancelled)
         self.scan_worker.issue.connect(self._on_scan_issue)
         self.scan_worker.report.connect(self._on_scan_report)
+        TaskManager.instance().register('目录扫描', self.scan_worker)
         self.scan_worker.start()
 
         self.eta_label.setVisible(True)
@@ -271,7 +285,43 @@ class ScanTab(QWidget):
         self.cleanup_worker = CleanupAnalysisWorker(self)
         self.cleanup_worker.done.connect(self._on_cleanup_ready)
         self.cleanup_worker.error.connect(self._on_cleanup_error)
+        TaskManager.instance().register('清理建议分析', self.cleanup_worker)
         self.cleanup_worker.start()
+
+    def _show_task_center(self):
+        TaskCenterDialog(self).exec()
+
+    def _check_index_health(self):
+        try:
+            service = IndexHealthService()
+            report = service.inspect()
+        except Exception as exc:
+            logger.exception('索引健康检查失败')
+            QMessageBox.critical(self, '索引检查', f'检查失败: {exc}')
+            return
+
+        missing = report['missing_records']
+        orphan = report['orphan_content_count']
+        message = (f"已检查 {report['active_files']} 条活跃索引记录。\n"
+                   f"不存在的路径：{len(missing)} 条\n"
+                   f"孤立正文索引：{orphan} 条")
+        if not missing and not orphan:
+            QMessageBox.information(self, '索引检查', message + '\n\n索引状态正常。')
+            return
+        answer = QMessageBox.question(
+            self, '索引检查', message +
+            '\n\n是否修复？不存在的路径只会标记为已删除，正文孤立索引会被移除。',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            result = service.repair(report)
+            self.refresh_data()
+            notify(self, f"已修复：标记缺失 {result['marked_deleted']} 条，清理孤立正文索引 {result['orphan_content_removed']} 条", 'success', 4000)
+        except Exception as exc:
+            logger.exception('索引修复失败')
+            QMessageBox.critical(self, '索引修复', f'修复失败: {exc}')
 
     def _on_cleanup_ready(self, report):
         self._finish_cleanup_analysis()
@@ -355,6 +405,7 @@ class ScanTab(QWidget):
             self.post_worker.progress.connect(self._on_post_progress)
             self.post_worker.finished.connect(self._on_post_finished)
             self.post_worker.error.connect(self._on_post_error)
+            TaskManager.instance().register('扫描后处理', self.post_worker)
             self.post_worker.start()
         else:
             self._start_content_index_or_finish()
@@ -380,6 +431,7 @@ class ScanTab(QWidget):
         self.content_index_worker = ContentIndexWorker(directory, self)
         self.content_index_worker.done.connect(self._on_content_index_done)
         self.content_index_worker.error.connect(self._on_content_index_error)
+        TaskManager.instance().register('正文索引', self.content_index_worker)
         self.content_index_worker.start()
 
     def _on_content_index_done(self, result):

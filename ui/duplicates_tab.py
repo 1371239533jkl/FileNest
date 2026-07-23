@@ -86,6 +86,10 @@ class DuplicatesTab(QWidget):
             0, QHeaderView.ResizeMode.Stretch)
         self.detail_table.horizontalHeader().setSectionResizeMode(
             1, QHeaderView.ResizeMode.Stretch)
+        self.detail_table.horizontalHeader().setSectionResizeMode(
+            4, QHeaderView.ResizeMode.Fixed)
+        self.detail_table.setColumnWidth(4, 126)
+        self.detail_table.verticalHeader().setDefaultSectionSize(36)
         self.detail_table.setAlternatingRowColors(True)
         self.detail_table.setSelectionBehavior(
             QTableWidget.SelectionBehavior.SelectRows)
@@ -290,11 +294,13 @@ class DuplicatesTab(QWidget):
                 "border: none; border-radius: 4px; font-size: 11px; "
                 "padding: 3px 8px; min-height: 0px; }"
                 "QPushButton:hover { background-color: #eba0ac; }")
+            del_btn.setFixedWidth(110)
             del_btn.setFixedHeight(26)
             del_btn.clicked.connect(
                 lambda _, fid=f['id'], name=f['file_name']:
                     self._delete_single(fid, name))
             btn_layout.addWidget(del_btn)
+            btn_layout.setAlignment(del_btn, Qt.AlignmentFlag.AlignCenter)
 
             self.detail_table.setCellWidget(i, 4, btn_widget)
 
