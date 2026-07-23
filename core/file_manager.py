@@ -134,6 +134,58 @@ class FileManager:
 
         return batch_id, results
 
+    def preview_batch_rename(self, file_ids: list,
+                             pattern: Optional[str] = None) -> list[dict]:
+        """Return a non-mutating rename plan for UI confirmation."""
+        plan = []
+        reserved_paths = set()
+        for file_id in file_ids:
+            record = self.file_dao.get_by_id(file_id)
+            if not record:
+                plan.append({'file_id': file_id, 'valid': False, 'reason': '文件记录不存在'})
+                continue
+            old_path = record.get('file_path', '')
+            try:
+                name = self._generate_name(record, pattern or DEFAULT_RENAME_PATTERN)
+                ext = record.get('file_extension', '')
+                if ext and not name.lower().endswith(ext.lower()):
+                    name += ext
+                new_path = os.path.join(os.path.dirname(old_path), name)
+                conflict = (new_path != old_path and
+                            (os.path.exists(new_path) or new_path in reserved_paths))
+                reserved_paths.add(new_path)
+                plan.append({
+                    'file_id': file_id, 'valid': bool(old_path), 'old_path': old_path,
+                    'new_path': new_path, 'conflict': conflict,
+                    'reason': '目标名称已存在，将自动追加序号' if conflict else '',
+                })
+            except Exception as exc:
+                plan.append({'file_id': file_id, 'valid': False, 'reason': str(exc)})
+        return plan
+
+    def preview_move(self, file_ids: list, target_dir: str) -> list[dict]:
+        """Return the target paths and collision state before a batch move."""
+        if not target_dir or not os.path.isdir(target_dir):
+            raise ValueError('目标目录无效')
+        plan = []
+        reserved_paths = set()
+        for file_id in file_ids:
+            record = self.file_dao.get_by_id(file_id)
+            if not record:
+                plan.append({'file_id': file_id, 'valid': False, 'reason': '文件记录不存在'})
+                continue
+            old_path = record.get('file_path', '')
+            new_path = os.path.join(target_dir, record.get('file_name', ''))
+            conflict = (new_path != old_path and
+                        (os.path.exists(new_path) or new_path in reserved_paths))
+            reserved_paths.add(new_path)
+            plan.append({
+                'file_id': file_id, 'valid': bool(old_path), 'old_path': old_path,
+                'new_path': new_path, 'conflict': conflict,
+                'reason': '目标名称已存在，将自动追加序号' if conflict else '',
+            })
+        return plan
+
     def move_file(self, file_id: int, target_dir: str,
                   batch_id: Optional[str] = None) -> Optional[int]:
         """移动文件到目标目录"""
@@ -213,15 +265,14 @@ class FileManager:
         self.file_dao.delete_record(file_id)
         logger.info(f"已从数据库彻底移除: {file_path} (id={file_id})")
 
-    def restore_file(self, file_id: int) -> None:
-        """从回收区恢复文件到原路径（供 UI 调用）"""
+    def get_restore_preview(self, file_id: int) -> dict:
+        """Describe a restore operation without touching disk or database."""
         record = self.file_dao.get_by_id(file_id)
         if not record:
             raise ValueError(f"文件记录不存在: id={file_id}")
         if record['status'] != 'deleted':
             raise ValueError(f"文件未被删除，无法恢复: id={file_id}")
 
-        # 精确查找该文件最近一次删除/去重操作记录
         op = self.history_dao.get_latest_delete(file_id)
         trash_path = None
         if op:
@@ -229,15 +280,38 @@ class FileManager:
             if nv and nv not in ('permanent', 'recycle_bin') and os.path.exists(nv):
                 trash_path = nv
 
-        original_path = record['file_path']
-        if trash_path:
-            _restore_from_trash(trash_path, original_path)
-        else:
+        if not trash_path:
             raise FileNotFoundError("回收区中找不到该文件，无法恢复")
 
+        original_path = record['file_path']
+        return {
+            'file_id': file_id, 'original_path': original_path,
+            'trash_path': trash_path, 'conflict': os.path.exists(original_path),
+        }
+
+    def restore_file(self, file_id: int, conflict_strategy: str = 'error') -> str:
+        """Restore a file and optionally rename it when the original path exists.
+
+        ``conflict_strategy`` is ``error`` (default) or ``rename``. Existing
+        files are never overwritten by this application.
+        """
+        preview = self.get_restore_preview(file_id)
+        original_path = preview['original_path']
+        target_path = original_path
+        if preview['conflict']:
+            if conflict_strategy != 'rename':
+                raise FileExistsError(f"原路径已被占用: {original_path}")
+            target_path = self._ensure_unique_path(original_path)
+
+        _restore_from_trash(preview['trash_path'], target_path)
+        record = self.file_dao.get_by_id(file_id)
+        if target_path != original_path:
+            self.file_dao.update_name(file_id, os.path.basename(target_path), target_path)
+
         self.file_dao.update_status(file_id, 'active')
-        self.history_dao.insert('restore', file_id, trash_path, original_path)
-        logger.info(f"恢复文件: {original_path}")
+        self.history_dao.insert('restore', file_id, preview['trash_path'], target_path)
+        logger.info(f"恢复文件: {target_path}")
+        return target_path
 
     def purge_file(self, file_id: int, update_status: bool = True) -> None:
         """从回收区永久删除文件（删除磁盘回收区副本 + 从数据库中彻底移除记录）"""
