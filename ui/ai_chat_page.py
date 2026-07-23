@@ -318,6 +318,7 @@ class _ChatBubble(QFrame):
         # 工具名称标题
         icons = {
             "search_files": "📂",
+            "search_content": "📝",
             "search_web": "🌐",
             "read_file": "📄",
         }
@@ -752,6 +753,7 @@ class AiChatPage(QWidget):
         self._tool_checks = {}
         tools_info = [
             ("search_files", "📂 文件搜索", True),
+            ("search_content", "📝 正文检索（含来源）", True),
             ("search_web", "🌐 联网搜索", True),
             ("read_file", "📄 读取文件", True),
         ]
@@ -1354,7 +1356,8 @@ class AiChatPage(QWidget):
         if self._current_streaming_bubble:
             current = self._current_streaming_bubble._text_browser.toPlainText()
             if not current.strip() or current.strip() == "🤔 正在思考...":
-                icons = {"search_files": "📂", "search_web": "🌐", "read_file": "📄"}
+                icons = {"search_files": "📂", "search_content": "📝",
+                         "search_web": "🌐", "read_file": "📄"}
                 icon = icons.get(tool_name, "🔧")
                 self._current_streaming_bubble.set_text(
                     f"{icon} 正在调用工具: **{tool_name}**...\n\n请稍候..."
@@ -1515,13 +1518,15 @@ class AiChatPage(QWidget):
         """根据开关状态重新构建工具注册表"""
         from core.ai_tools import (
             ToolRegistry, create_search_files_tool, create_search_web_tool,
-            create_read_file_tool,
+            create_read_file_tool, create_search_content_tool,
         )
 
         registry = ToolRegistry()
 
         if self._tool_checks.get("search_files", QCheckBox()).isChecked():
             registry.register(create_search_files_tool(db_manager=self.ai_layer.db_manager))
+        if self._tool_checks.get("search_content", QCheckBox()).isChecked():
+            registry.register(create_search_content_tool(db_manager=self.ai_layer.db_manager))
         if self._tool_checks.get("search_web", QCheckBox()).isChecked():
             registry.register(create_search_web_tool())
         if self._tool_checks.get("read_file", QCheckBox()).isChecked():

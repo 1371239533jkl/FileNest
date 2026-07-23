@@ -1,8 +1,10 @@
 """
 轻量级图表组件 - 使用 QPainter 绘制，无外部依赖
 """
-from PyQt6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel
-from PyQt6.QtCore import Qt, QRectF, QPointF
+from PyQt6.QtWidgets import (
+    QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy
+)
+from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QBrush
 
 from utils.display_utils import format_size
@@ -19,12 +21,18 @@ _PALETTE = [
 
 class StatCard(QFrame):
     """统计卡片：数值 + 标签 + 子标题 + 图标"""
+    clicked = pyqtSignal()
 
     def __init__(self, label: str, value: str = "-", color: str = '#cba6f7',
                  icon: str = '', parent=None):
         super().__init__(parent)
-        self.setMinimumHeight(80)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Three text rows need a stable vertical budget.  A smaller minimum
+        # lets the dashboard compress the value label when another card grows.
+        self.setMinimumHeight(124)
         self.setMinimumWidth(140)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding,
+                           QSizePolicy.Policy.Fixed)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(6)
@@ -33,10 +41,12 @@ class StatCard(QFrame):
         header_layout = QHBoxLayout()
         if icon:
             self._icon_label = QLabel(icon)
+            self._icon_label.setMinimumHeight(22)
             self._icon_label.setStyleSheet(
                 f"font-size: 16px; color: {color}; border: none; background: transparent;")
             header_layout.addWidget(self._icon_label)
         self._text_label = QLabel(label)
+        self._text_label.setMinimumHeight(22)
         self._text_label.setStyleSheet(
             f"font-size: 12px; color: #a0a0b0; border: none; background: transparent;")
         header_layout.addWidget(self._text_label)
@@ -45,6 +55,11 @@ class StatCard(QFrame):
 
         # 数值
         self._value_label = QLabel(value)
+        self._value_label.setMinimumHeight(42)
+        self._value_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._value_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self._value_label.setStyleSheet(
             f"font-size: 26px; font-weight: bold; color: #ffffff; "
             f"border: none; background: transparent;")
@@ -52,6 +67,11 @@ class StatCard(QFrame):
 
         # 子标题
         self._sub_label = QLabel("")
+        self._sub_label.setMinimumHeight(20)
+        self._sub_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._sub_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self._sub_label.setStyleSheet(
             f"font-size: 12px; color: {color}; border: none; background: transparent;")
         layout.addWidget(self._sub_label)
@@ -61,6 +81,11 @@ class StatCard(QFrame):
 
     def set_sub(self, text: str):
         self._sub_label.setText(text)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
 
 
 

@@ -6,7 +6,8 @@ from PyQt6.QtWidgets import (
     QTreeWidgetItem, QTableView, QAbstractItemView, QPushButton,
     QLabel, QMessageBox, QHeaderView, QInputDialog, QFileDialog,
     QMenu, QApplication, QProgressBar, QFrame, QTextEdit, QScrollArea,
-    QStackedWidget, QSizePolicy, QDialog, QDialogButtonBox, QCheckBox
+    QStackedWidget, QSizePolicy, QDialog, QDialogButtonBox, QCheckBox,
+    QLineEdit
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QAbstractTableModel, QModelIndex
 from PyQt6.QtGui import QColor, QBrush, QPixmap
@@ -174,16 +175,34 @@ class FileTableModel(QAbstractTableModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._files = []          # 文件记录列表
+        self._source_files = []   # 当前页未筛选记录
         self._cls_map = {}        # file_id → [classification_values]
         self._id_to_row = {}      # file_id → row index
 
     def set_files(self, files: list, cls_map: dict):
         """设置模型数据（调用 beginResetModel/endResetModel 通知 View 全量刷新）"""
         self.beginResetModel()
-        self._files = files
+        self._source_files = list(files)
+        self._files = list(files)
         self._cls_map = cls_map
         self._id_to_row = {f['id']: i for i, f in enumerate(files)}
         self.endResetModel()
+
+    def set_name_filter(self, text: str) -> int:
+        """Filter the loaded page without another database query."""
+        keyword = text.strip().casefold()
+        self.beginResetModel()
+        if keyword:
+            self._files = [
+                item for item in self._source_files
+                if keyword in str(item.get('file_name', '')).casefold()
+                or keyword in str(item.get('file_path', '')).casefold()
+            ]
+        else:
+            self._files = list(self._source_files)
+        self._id_to_row = {f['id']: i for i, f in enumerate(self._files)}
+        self.endResetModel()
+        return len(self._files)
 
     def get_record(self, row: int):
         """获取指定行的文件记录"""
@@ -399,6 +418,12 @@ class ClassifyTab(QWidget):
         # 批量操作
         batch_layout = QHBoxLayout()
 
+        self.page_filter_input = QLineEdit()
+        self.page_filter_input.setPlaceholderText("筛选当前页的文件名或路径...")
+        self.page_filter_input.setClearButtonEnabled(True)
+        self.page_filter_input.textChanged.connect(self._filter_current_page)
+        batch_layout.addWidget(self.page_filter_input, 1)
+
         rename_btn = QPushButton("批量重命名")
         rename_btn.clicked.connect(self._batch_rename)
         batch_layout.addWidget(rename_btn)
@@ -443,7 +468,8 @@ class ClassifyTab(QWidget):
         right_layout.addWidget(self.file_table)
 
         # 空状态引导
-        self._empty_state = create_empty_state('classify', parent=center_widget)
+        self._empty_state = create_empty_state(
+            'classify', "重试加载", self.refresh_data, parent=center_widget)
         right_layout.addWidget(self._empty_state)
 
         # 分页控件
@@ -647,7 +673,7 @@ class ClassifyTab(QWidget):
             # 无缓存，显示加载状态
             self.file_count_label.setText("加载中...")
             self.file_table.setVisible(False)
-            self._empty_state.setVisible(False)
+            self._empty_state.show_loading("正在读取分类和文件列表...")
         
         # 3. 停止之前的 worker（如果存在）
         if hasattr(self, '_data_worker') and self._data_worker is not None:
@@ -679,7 +705,7 @@ class ClassifyTab(QWidget):
         logger.error(f"加载文件失败: {error_msg}")
         self.file_count_label.setText("加载失败")
         self.file_table.setVisible(False)
-        self._empty_state.setVisible(True)
+        self._empty_state.show_error(f"无法读取文件列表：{error_msg}")
         self._data_worker = None
         self._is_loading = False
 
@@ -696,7 +722,10 @@ class ClassifyTab(QWidget):
         self.file_count_label.setText(f"共 {total} 个文件")
 
         # 空状态检测
-        self._empty_state.setVisible(len(files) == 0)
+        if files:
+            self._empty_state.setVisible(False)
+        else:
+            self._empty_state.show_empty()
         self.file_table.setVisible(len(files) > 0)
 
         # 批量查询分类（避免 N+1）
@@ -708,11 +737,25 @@ class ClassifyTab(QWidget):
 
         # ── 直接设置模型数据，零 Q表单项创建 ──
         self._file_model.set_files(files, cls_map)
+        if self.page_filter_input.text().strip():
+            self._filter_current_page(self.page_filter_input.text())
 
         # 更新分页状态
         self.page_label.setText(f"第 {self.current_page + 1} 页 / 共 {total_pages} 页")
         self.prev_page_btn.setEnabled(self.current_page > 0)
         self.next_page_btn.setEnabled(self.current_page < total_pages - 1)
+
+    def _filter_current_page(self, text: str):
+        visible = self._file_model.set_name_filter(text)
+        has_rows = visible > 0
+        self.file_table.setVisible(has_rows)
+        if has_rows:
+            self._empty_state.setVisible(False)
+        elif text.strip():
+            self._empty_state.show_empty(
+                "🔍", "当前页没有匹配文件", "清除筛选词或切换到其他分类后重试。")
+        self.file_count_label.setText(
+            f"当前页显示 {visible} 个 / 共 {self._total_count} 个文件")
 
     def _prev_page(self):
         if self.current_page > 0:
@@ -1035,9 +1078,18 @@ class ClassifyTab(QWidget):
         if not ids:
             QMessageBox.information(self, "提示", "请先选择要重命名的文件")
             return
+        plan = self.file_manager.preview_batch_rename(ids)
+        invalid = [item for item in plan if not item.get('valid')]
+        conflicts = [item for item in plan if item.get('conflict')]
+        samples = [
+            f"{os.path.basename(item.get('old_path', ''))} -> {os.path.basename(item.get('new_path', ''))}"
+            for item in plan if item.get('valid')][:5]
+        detail = "\n".join(samples)
         reply = QMessageBox.question(
             self, "确认批量重命名",
-            f"将对 {len(ids)} 个文件执行重命名\n格式: 日期_类型_原名\n确定继续?")
+            f"将对 {len(ids)} 个文件执行重命名\n格式: 日期_类型_原名"
+            f"\n路径冲突: {len(conflicts)} 个（将自动追加序号）"
+            f"\n无效项: {len(invalid)} 个\n\n预览：\n{detail}\n\n确定继续?")
         if reply != QMessageBox.StandardButton.Yes:
             return
         self._start_batch_operation(
@@ -1052,6 +1104,20 @@ class ClassifyTab(QWidget):
             return
         target = QFileDialog.getExistingDirectory(self, "选择目标目录")
         if not target:
+            return
+        plan = self.file_manager.preview_move(ids, target)
+        invalid = [item for item in plan if not item.get('valid')]
+        conflicts = [item for item in plan if item.get('conflict')]
+        samples = [
+            f"{os.path.basename(item.get('old_path', ''))} -> {os.path.basename(item.get('new_path', ''))}"
+            for item in plan if item.get('valid')][:5]
+        detail = "\n".join(samples)
+        reply = QMessageBox.question(
+            self, "确认批量移动",
+            f"目标目录：\n{target}\n\n文件数: {len(ids)}"
+            f"\n路径冲突: {len(conflicts)} 个（将自动追加序号）"
+            f"\n无效项: {len(invalid)} 个\n\n预览：\n{detail}\n\n确定继续?")
+        if reply != QMessageBox.StandardButton.Yes:
             return
         self._start_batch_operation(
             operation_func=self.file_manager.move_file,
@@ -1086,6 +1152,12 @@ class ClassifyTab(QWidget):
         self.reclassify_label.setVisible(False)
         msg = f"{operation_name}完成: 成功 {results['success']}, 失败 {results['failed']}"
         notify(self, msg, 'success' if results['failed'] == 0 else 'warning', 4000)
+        if results['failed']:
+            QMessageBox.warning(
+                self, f"{operation_name}结果",
+                f"{msg}\n\n失败详情：\n" + "\n".join(results['errors'][:8]))
+        else:
+            QMessageBox.information(self, f"{operation_name}结果", msg)
         self.refresh_data()
 
     def _reclassify_all(self):

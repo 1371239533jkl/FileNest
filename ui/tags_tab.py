@@ -84,6 +84,7 @@ class TagsTab(QWidget):
         top = QHBoxLayout()
         for text, obj, fn in [
             ("➕ 新建标签", "primaryBtn", self._create_tag),
+            ("⇄ 合并标签", None, self._merge_tag),
             ("🗑 删除标签", "dangerBtn", self._delete_tag),
             (None, None, None),
             ("🏷 打标签", "successBtn", self._batch_tag),
@@ -184,7 +185,8 @@ class TagsTab(QWidget):
         layout.addWidget(sp, 1)
 
         # 空状态引导
-        self._empty_state = create_empty_state('tags', parent=self)
+        self._empty_state = create_empty_state(
+            'tags', "重试加载", self.refresh_data, parent=self)
         layout.addWidget(self._empty_state)
 
     # ── 标签云构建 ──
@@ -198,7 +200,10 @@ class TagsTab(QWidget):
 
         # 空状态检测
         has_tags = len(tags) > 0
-        self._empty_state.setVisible(not has_tags)
+        if has_tags:
+            self._empty_state.setVisible(False)
+        else:
+            self._empty_state.show_empty()
 
         # 全部文件 —— 使用调色板配色，与普通标签风格统一
         all_bg, all_fg = ('#585b70', '#cdd6f4') if self._theme == 'light' else ('#45475a', '#cdd6f4')
@@ -274,6 +279,8 @@ class TagsTab(QWidget):
             self._fill(files)
         except Exception as e:
             logger.error(f"加载文件失败: {e}")
+            self.tbl.setVisible(False)
+            self._empty_state.show_error(f"无法读取文件列表：{e}")
 
     def _load_by(self, tn: str):
         try:
@@ -283,11 +290,18 @@ class TagsTab(QWidget):
             self._fill(files)
         except Exception as e:
             logger.error(f"加载标签文件失败: {e}")
+            self.tbl.setVisible(False)
+            self._empty_state.show_error(f"无法读取标签文件：{e}")
 
     def _fill(self, files):
         # 修复：翻页/切换标签时清除上一页的选中状态，避免跨页选中残留
         self.tbl.clearSelection()
         self.current_files = files
+        self.tbl.setVisible(bool(files))
+        if files:
+            self._empty_state.setVisible(False)
+        else:
+            self._empty_state.show_empty()
         total_pages = max(1, (self._total_count + self.page_size - 1) // self.page_size)
         if self.current_page >= total_pages:
             self.current_page = total_pages - 1
@@ -373,6 +387,31 @@ class TagsTab(QWidget):
             notify(self, "标签已删除", 'success', 3000)
             self.current_tag = None
             self.refresh_data()
+
+    def _merge_tag(self):
+        if not self.current_tag:
+            QMessageBox.information(self, "提示", "请先在标签云中选择要合并的源标签")
+            return
+        target, ok = QInputDialog.getText(
+            self, "合并标签", f"将“{self.current_tag}”合并到标签：")
+        if not ok or not target.strip():
+            return
+        target = target.strip()
+        if target == self.current_tag:
+            QMessageBox.warning(self, "无法合并", "源标签和目标标签不能相同")
+            return
+        reply = QMessageBox.question(
+            self, "确认合并",
+            f"“{self.current_tag}”的文件关联会转移到“{target}”，源标签将被删除。\n确定继续？")
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            count = self.tag_manager.merge_tag(self.current_tag, target)
+            self.current_tag = target
+            notify(self, f"标签已合并，迁移 {count} 个文件关联", 'success', 3000)
+            self.refresh_data()
+        except Exception as exc:
+            QMessageBox.critical(self, "合并失败", str(exc))
 
     def _batch_tag(self):
         ids = self._get_ids()

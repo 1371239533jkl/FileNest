@@ -86,6 +86,29 @@ class DashboardTab(QWidget):
         cards_layout.addWidget(self.card_tags)
         cards_layout.addWidget(self.card_storage)
         self._grid.addLayout(cards_layout)
+        self.card_total_files.clicked.connect(lambda: self._navigate(2))
+        self.card_classified.clicked.connect(lambda: self._navigate(2))
+        self.card_tags.clicked.connect(lambda: self._navigate(8))
+        self.card_storage.clicked.connect(lambda: self._navigate(7))
+
+        # ── 待处理事项：真实数据库状态，可点击进入处理页面 ──
+        pending_card = QFrame()
+        pending_layout = QHBoxLayout(pending_card)
+        pending_layout.setContentsMargins(16, 12, 16, 12)
+        pending_layout.setSpacing(10)
+        self.pending_title = QLabel("待处理")
+        pending_layout.addWidget(self.pending_title)
+        self.pending_buttons = []
+        for text, tab_index in (("未分类", 2), ("未计算哈希", 1),
+                                ("重复文件", 7), ("回收区", 6)):
+            button = QPushButton(text)
+            button.setObjectName("dashboardPendingBtn")
+            button.clicked.connect(
+                lambda _checked=False, index=tab_index: self._navigate(index))
+            pending_layout.addWidget(button)
+            self.pending_buttons.append(button)
+        pending_layout.addStretch()
+        self._grid.addWidget(pending_card)
 
         # ── 中间行：AI 洞察 + 类型分布 + 最近活动 ──
         mid_row = QHBoxLayout()
@@ -171,6 +194,11 @@ class DashboardTab(QWidget):
         bottom_row.addWidget(quick_card, 1)
 
         self._grid.addLayout(bottom_row)
+
+        # ── 空间占用排行：帮助用户快速定位可清理的目录 ──
+        self.directory_usage = BarChartWidget()
+        self.directory_usage.setMinimumHeight(210)
+        self._grid.addWidget(self.directory_usage)
         self._grid.addStretch()
 
         scroll.setWidget(self._content)
@@ -184,8 +212,8 @@ class DashboardTab(QWidget):
         self.btn_quick_scan.clicked.connect(self._on_quick_scan)
         self.btn_quick_dup.clicked.connect(self._on_quick_dup)
         self.btn_quick_ai.clicked.connect(self._on_quick_ai)
-        self._theme_cards = [insight_card, activity_card, quick_card,
-                             self.pie_type, self.trend_monthly]
+        self._theme_cards = [pending_card, insight_card, activity_card, quick_card,
+                             self.pie_type, self.trend_monthly, self.directory_usage]
         self.apply_theme('dark')
 
     def apply_theme(self, theme_name: str):
@@ -197,7 +225,8 @@ class DashboardTab(QWidget):
         muted = '#a0a0b0' if is_dark else '#64748b'
         for card in getattr(self, '_theme_cards', []):
             card.setStyleSheet(f'background-color: {surface}; border-radius: 12px;')
-        for label in (self.title_label, self.insight_title, self.activity_title, self.quick_title):
+        for label in (self.title_label, self.pending_title, self.insight_title,
+                      self.activity_title, self.quick_title):
             label.setStyleSheet(f'font-weight: bold; font-size: 13px; color: {text};')
         self.title_label.setStyleSheet(f'font-weight: bold; font-size: 18px; color: {text};')
         self.insight_sub.setStyleSheet(f'color: {muted}; font-size: 12px;')
@@ -206,6 +235,10 @@ class DashboardTab(QWidget):
             button.setStyleSheet(
                 f'text-align: left; padding: 10px 14px; border: none; '
                 f'background-color: {surface_alt}; color: {text}; border-radius: 8px;')
+        for button in getattr(self, 'pending_buttons', []):
+            button.setStyleSheet(
+                f'padding: 7px 12px; color: {text}; background-color: {surface_alt}; '
+                f'border: none; border-radius: 6px;')
 
     def refresh_data(self):
         try:
@@ -229,6 +262,9 @@ class DashboardTab(QWidget):
             self.card_storage.set_value("-")
             self.pie_type.set_data([], "类型分布")
             self.trend_monthly.set_data([], "文件增长趋势")
+            self.directory_usage.set_data([], "目录占用排行")
+            for button in self.pending_buttons:
+                button.setText(button.text().split()[0] + "  0")
             return
 
 
@@ -250,14 +286,30 @@ class DashboardTab(QWidget):
         all_tags = tag_dao.get_all_tags()
         tag_count = len(all_tags) if all_tags else 0
 
+        recent_row = db.execute_one(
+            "SELECT COUNT(*) AS cnt FROM files WHERE status='active' "
+            "AND datetime(scan_time) >= datetime('now', '-7 days')") or {'cnt': 0}
+        unclassified_row = db.execute_one(
+            "SELECT COUNT(*) AS cnt FROM files f WHERE f.status='active' "
+            "AND NOT EXISTS (SELECT 1 FROM file_classifications c WHERE c.file_id=f.id)") or {'cnt': 0}
+        unhashed_row = db.execute_one(
+            "SELECT COUNT(*) AS cnt FROM files WHERE status='active' AND file_hash IS NULL") or {'cnt': 0}
+        deleted_count = self.file_dao.count_deleted()
+
         self.card_total_files.set_value(f"{total_files:,}")
-        self.card_total_files.set_sub(f"+{total_files} 本周")
+        self.card_total_files.set_sub(f"近 7 天索引 {recent_row['cnt']} 个")
         self.card_classified.set_value(f"{classified_count:,}")
         self.card_classified.set_sub(f"{coverage:.1f}% 覆盖率")
         self.card_tags.set_value(f"{tag_count}")
-        self.card_tags.set_sub(f"15 个新标签")
+        self.card_tags.set_sub(f"覆盖 {sum(t.get('file_count', 0) for t in all_tags)} 次")
         self.card_storage.set_value(format_size(total_size))
-        self.card_storage.set_sub(f"剩余 {format_size(total_size - wasted)}")
+        self.card_storage.set_sub(f"重复占用约 {format_size(wasted)}")
+
+        pending_values = (
+            unclassified_row['cnt'], unhashed_row['cnt'], dup_groups, deleted_count)
+        pending_names = ("未分类", "未计算哈希", "重复组", "回收区")
+        for button, name, value in zip(self.pending_buttons, pending_names, pending_values):
+            button.setText(f"{name}  {value}")
 
         # ── 类型分布饼图 ──
         type_stats = self.file_dao.get_type_stats()
@@ -276,12 +328,21 @@ class DashboardTab(QWidget):
             })
         self.pie_type.set_data(pie_data, "类型分布")
 
-        # ── 最近活动（模拟）──
+        # ── 最近活动 ──
         self._clear_activity_list()
-        self._add_activity("\U0001F535 Q3 报告.pdf 已更新", "#3b82f6")
-        self._add_activity("\U0001F7E2 12 个文件已自动分类", "#10b981")
-        self._add_activity("\U0001F7E1 标签 [重要] 已批量应用", "#f59e0b")
-        self._add_activity("\U0001F7E3 扫描完成: Downloads", "#8b5cf6")
+        activities = db.execute_query(
+            "SELECT operation_type, operation_time, operation_status "
+            "FROM operation_history ORDER BY operation_time DESC LIMIT 4")
+        if activities:
+            op_names = {'rename': '重命名', 'move': '移动', 'delete': '删除',
+                        'restore': '恢复', 'permanent_delete': '永久删除'}
+            for item in activities:
+                name = op_names.get(item['operation_type'], item['operation_type'])
+                time_text = str(item.get('operation_time') or '')[:16]
+                color = '#10b981' if item.get('operation_status') == 'completed' else '#f59e0b'
+                self._add_activity(f"{name} · {time_text}", color)
+        else:
+            self._add_activity("暂无文件操作记录", "#6b7280")
 
         # ── 月度趋势 ──
         monthly = self.file_dao.get_monthly_trend()
@@ -293,9 +354,19 @@ class DashboardTab(QWidget):
             })
         self.trend_monthly.set_data(trend_data, "文件增长趋势")
 
+        # ── 目录空间占用排行 ──
+        top_dirs = self.file_dao.get_top_directories(limit=5)
+        directory_data = []
+        for row in top_dirs:
+            directory_data.append({
+                'label': row.get('dir_path') or '未知目录',
+                'value': row.get('total_size') or 0,
+            })
+        self.directory_usage.set_data(directory_data, "目录占用排行（前 5）", show_size=True)
+
         # ── 触发 AI 洞察 ──
         self._trigger_ai_insight(total_files, total_size, dup_groups, wasted,
-                                  type_stats, monthly)
+                                  type_stats, monthly, top_dirs)
 
     def _clear_activity_list(self):
         while self.activity_list.count():
@@ -310,7 +381,7 @@ class DashboardTab(QWidget):
 
 
     def _trigger_ai_insight(self, total_files, total_size, dup_groups, wasted,
-                             type_stats, monthly):
+                             type_stats, monthly, top_dirs):
         """后台触发 AI 仪表盘洞察"""
         from core.ai_layer import AILayer
         ai = AILayer()
@@ -326,6 +397,10 @@ class DashboardTab(QWidget):
             f"{r.get('month', '')}:{r.get('count', 0)}个"
             for r in monthly[-6:]
         )
+        top_dirs_text = ", ".join(
+            f"{r.get('dir_path', '')}:{format_size(r.get('total_size') or 0)}"
+            for r in top_dirs[:3]
+        )
 
         stats = {
             "total_files": total_files,
@@ -333,7 +408,7 @@ class DashboardTab(QWidget):
             "dup_groups": dup_groups,
             "wasted": format_size(wasted),
             "type_distribution": type_dist,
-            "top_dirs": "",
+            "top_dirs": top_dirs_text,
             "monthly_trend": monthly_text,
         }
 
@@ -353,18 +428,28 @@ class DashboardTab(QWidget):
             self._insight_widget.setVisible(False)
 
     def _on_insight_error(self, err: str):
-        self._insight_widget.setVisible(False)
+        self._insight_widget.setVisible(True)
+        if "402" in err:
+            self.insight_label.setText(
+                "AI 服务额度或计费状态不可用。请检查当前模型账户余额，"
+                "或在系统设置中切换其他模型。")
+        else:
+            self.insight_label.setText("AI 洞察暂时不可用，其他文件管理功能不受影响。")
         logger.warning(f"仪表盘 AI 洞察失败: {err}")
 
     def _on_quick_scan(self):
-        if self.parent():
-            self.parent().switch_to_tab(1)
+        self._navigate(1)
 
     def _on_quick_dup(self):
-        if self.parent():
-            self.parent().switch_to_tab(7)
+        self._navigate(7)
 
     def _on_quick_ai(self):
-        if self.parent():
-            self.parent().switch_to_tab(4)
+        self._navigate(4)
+
+    def _navigate(self, index: int):
+        main_window = self.window()
+        if hasattr(main_window, 'switch_to_tab'):
+            main_window.switch_to_tab(index)
+        else:
+            logger.warning(f"无法从仪表盘导航到页面 {index}: 未找到主窗口")
 

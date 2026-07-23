@@ -5,22 +5,74 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QPushButton,
     QLabel, QLineEdit, QComboBox, QTableWidget, QTableWidgetItem,
     QSpinBox, QDateEdit, QGroupBox, QHeaderView, QMessageBox,
-    QCheckBox, QMenu, QApplication, QInputDialog, QFileDialog
+    QCheckBox, QMenu, QApplication, QInputDialog, QFileDialog, QFrame
 )
-from PyQt6.QtCore import Qt, QDate, QThread, pyqtSignal
-from PyQt6.QtGui import QAction, QColor, QBrush
+from PyQt6.QtCore import Qt, QDate, QThread, pyqtSignal, QSettings, QTimer
+from PyQt6.QtGui import QAction, QColor, QBrush, QPalette
 
 import os
 import csv
+import json
 from config import FILE_TYPE_NAMES
 from core import FileManager
 from core.rule_engine import NLSearchParser
 from database.db_manager import db
-from database.models import FileDAO
+from database.models import FileDAO, FileContentDAO
+from core.content_indexer import ContentIndexer
 from utils.display_utils import format_size, truncate_path, get_file_icon, get_file_color
 from utils.logger import logger
 from ui.toast import notify
 from ui.empty_state import create_empty_state
+
+
+class ThemedComboBox(QComboBox):
+    """Force the Windows combo popup container to use the active QSS surface.
+
+    Qt creates a private popup QFrame outside the combo's normal widget tree.
+    On Windows that frame can retain the native white palette even when the
+    QAbstractItemView itself is styled.
+    """
+
+    def showPopup(self):
+        super().showPopup()
+        self._style_popup_container()
+        # Some platform styles finish creating the popup after showPopup().
+        QTimer.singleShot(0, self._style_popup_container)
+
+    def _style_popup_container(self):
+        popup = self.view().window()
+        if popup is self.window():
+            return
+
+        palette = self.palette()
+        background = palette.color(QPalette.ColorRole.Base)
+        foreground = palette.color(QPalette.ColorRole.Text)
+        # The Windows native palette can report a near-white Mid color even
+        # for a dark QSS surface, which reintroduces a visible popup rim.
+        border = QColor('#2a2a3e' if background.lightness() < 128 else '#cbd5e1')
+        popup_palette = popup.palette()
+        popup_palette.setColor(QPalette.ColorRole.Window, background)
+        popup_palette.setColor(QPalette.ColorRole.Base, background)
+        popup_palette.setColor(QPalette.ColorRole.Text, foreground)
+        popup.setPalette(popup_palette)
+        popup.setAutoFillBackground(True)
+        popup.setContentsMargins(0, 0, 0, 0)
+        if popup.layout():
+            popup.layout().setContentsMargins(0, 0, 0, 0)
+        popup.setStyleSheet(
+            f"background-color: {background.name()}; color: {foreground.name()}; "
+            f"border: 1px solid {border.name()}; margin: 0; padding: 0;")
+
+
+class ContentIndexWorker(QThread):
+    finished = pyqtSignal(dict)
+    error = pyqtSignal(str)
+
+    def run(self):
+        try:
+            self.finished.emit(ContentIndexer().index_active_files())
+        except Exception as exc:
+            self.error.emit(str(exc))
 
 
 class SearchTab(QWidget):
@@ -30,12 +82,18 @@ class SearchTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.file_dao = FileDAO(db)
+        self.content_dao = FileContentDAO(db)
         self.file_manager = FileManager()
         self.nl_parser = NLSearchParser()
         self.page_size = 100
         self.current_page = 0
         self.total_count = 0
         self._search_params = {}  # 存储搜索条件，翻页时复用
+        self._current_files = {}
+        self._content_results = []
+        self._content_mode = False
+        self._content_worker = None
+        self._settings = QSettings("FileNest", "FileNest")
         self._init_ui()
 
     def _init_ui(self):
@@ -87,9 +145,50 @@ class SearchTab(QWidget):
         ai_row.addWidget(self.ai_chat_btn)
         layout.addLayout(ai_row)
 
+        history_row = QHBoxLayout()
+        history_row.addWidget(QLabel("最近搜索:"))
+        self.history_combo = ThemedComboBox()
+        self.history_combo.setMinimumWidth(260)
+        self.history_combo.addItem("选择历史记录...", None)
+        self._reload_search_history()
+        self.history_combo.activated.connect(self._apply_history)
+        history_row.addWidget(self.history_combo)
+        clear_history_btn = QPushButton("清除历史")
+        clear_history_btn.clicked.connect(self._clear_search_history)
+        history_row.addWidget(clear_history_btn)
+        history_row.addStretch()
+        self.filter_toggle_btn = QPushButton("展开高级筛选")
+        self.filter_toggle_btn.setToolTip("显示文件类型、大小、日期和重复文件筛选条件")
+        self.filter_toggle_btn.clicked.connect(self._toggle_advanced_filters)
+        history_row.addWidget(self.filter_toggle_btn)
+        self.content_search_cb = QCheckBox("搜索正文")
+        self.content_search_cb.setToolTip("在已建立的本地文档内容索引中搜索")
+        history_row.addWidget(self.content_search_cb)
+        self.index_content_btn = QPushButton("构建正文索引")
+        self.index_content_btn.setToolTip("索引支持读取的文本、PDF 和 DOCX 文件，不会上传内容")
+        self.index_content_btn.clicked.connect(self._build_content_index)
+        history_row.addWidget(self.index_content_btn)
+        layout.addLayout(history_row)
+
+        collection_row = QHBoxLayout()
+        collection_row.addWidget(QLabel("智能集合:"))
+        self.collection_combo = ThemedComboBox()
+        self.collection_combo.addItem("选择已保存的集合...", None)
+        self.collection_combo.activated.connect(self._apply_collection)
+        collection_row.addWidget(self.collection_combo)
+        save_collection_btn = QPushButton("保存当前条件")
+        save_collection_btn.clicked.connect(self._save_collection)
+        collection_row.addWidget(save_collection_btn)
+        delete_collection_btn = QPushButton("删除集合")
+        delete_collection_btn.clicked.connect(self._delete_collection)
+        collection_row.addWidget(delete_collection_btn)
+        collection_row.addStretch()
+        layout.addLayout(collection_row)
+        self._reload_collections()
+
         # 搜索条件区
-        search_group = QGroupBox("高级搜索条件")
-        search_layout = QVBoxLayout(search_group)
+        self.search_group = QGroupBox("高级搜索条件")
+        search_layout = QVBoxLayout(self.search_group)
 
         # 第一行: 文件名搜索
         row1 = QHBoxLayout()
@@ -115,7 +214,7 @@ class SearchTab(QWidget):
         row2.setSpacing(20)
 
         row2.addWidget(QLabel("类型:"))
-        self.type_combo = QComboBox()
+        self.type_combo = ThemedComboBox()
         self.type_combo.addItem("全部", None)
         for key, name in FILE_TYPE_NAMES.items():
             self.type_combo.addItem(name, key)
@@ -135,7 +234,7 @@ class SearchTab(QWidget):
         row2.addWidget(self.max_size)
 
         row2.addWidget(QLabel("重复文件:"))
-        self.dup_combo = QComboBox()
+        self.dup_combo = ThemedComboBox()
         self.dup_combo.addItem("全部", None)
         self.dup_combo.addItem("仅重复", 1)
         self.dup_combo.addItem("非重复", 0)
@@ -170,7 +269,13 @@ class SearchTab(QWidget):
         row3.addStretch()
         search_layout.addLayout(row3)
 
-        layout.addWidget(search_group)
+        layout.addWidget(self.search_group)
+        self._set_advanced_filters_expanded(False)
+
+        self.filter_summary = QLabel("当前条件：未设置")
+        self.filter_summary.setObjectName("subtitleLabel")
+        self.filter_summary.setWordWrap(True)
+        layout.addWidget(self.filter_summary)
 
         # 结果统计
         stats_layout = QHBoxLayout()
@@ -178,6 +283,15 @@ class SearchTab(QWidget):
         self.result_label.setObjectName("subtitleLabel")
         stats_layout.addWidget(self.result_label)
         stats_layout.addStretch()
+
+        stats_layout.addWidget(QLabel("排序:"))
+        self.sort_combo = ThemedComboBox()
+        self.sort_combo.addItem("相关度/默认", -1)
+        self.sort_combo.addItem("文件名", 0)
+        self.sort_combo.addItem("大小", 3)
+        self.sort_combo.addItem("修改时间", 4)
+        self.sort_combo.currentIndexChanged.connect(self._sort_current_page)
+        stats_layout.addWidget(self.sort_combo)
 
         self.total_size_label = QLabel("")
         self.total_size_label.setObjectName("subtitleLabel")
@@ -198,14 +312,25 @@ class SearchTab(QWidget):
         self.result_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.result_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.result_table.setAlternatingRowColors(True)
+        self.result_table.verticalHeader().setDefaultSectionSize(34)
+        self.result_table.verticalHeader().setMinimumSectionSize(30)
         self.result_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.result_table.setSortingEnabled(True)
         self.result_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.result_table.customContextMenuRequested.connect(self._show_context_menu)
+        self.result_table.itemSelectionChanged.connect(self._update_result_detail)
         layout.addWidget(self.result_table, 1)
 
+        self.result_detail = QLabel("选择一个文件查看路径、大小和修改时间")
+        self.result_detail.setObjectName("subtitleLabel")
+        self.result_detail.setWordWrap(True)
+        self.result_detail.setMinimumHeight(42)
+        self.result_detail.setContentsMargins(10, 6, 10, 6)
+        layout.addWidget(self.result_detail)
+
         # 空状态引导
-        self._empty_state = create_empty_state('search', parent=self)
+        self._empty_state = create_empty_state(
+            'search', "重试搜索", self._load_page, parent=self)
         layout.addWidget(self._empty_state)
 
         # 分页控件
@@ -232,6 +357,17 @@ class SearchTab(QWidget):
         self.start_date.setEnabled(checked)
         self.end_date.setEnabled(checked)
 
+    def _toggle_advanced_filters(self):
+        self._set_advanced_filters_expanded(not self.search_group.isVisible())
+
+    def _set_advanced_filters_expanded(self, expanded: bool):
+        self.search_group.setVisible(expanded)
+        self.filter_toggle_btn.setText(
+            "收起高级筛选" if expanded else "展开高级筛选")
+        self.filter_toggle_btn.setToolTip(
+            "收起筛选条件以显示更多结果" if expanded
+            else "显示文件类型、大小、日期和重复文件筛选条件")
+
     def _do_search(self):
         self._search_params = {
             'name': self.name_input.text().strip() or None,
@@ -243,6 +379,62 @@ class SearchTab(QWidget):
             'is_duplicate': self.dup_combo.currentData(),
         }
         self.result_label.setStyleSheet("")
+        self._remember_search(self.name_input.text().strip() or self.nl_input.text().strip())
+        self._update_filter_summary()
+        self._set_advanced_filters_expanded(False)
+        self.current_page = 0
+        if self.content_search_cb.isChecked():
+            self._do_content_search()
+            return
+        self._content_mode = False
+        self._load_page()
+
+    def _build_content_index(self):
+        if self._content_worker and self._content_worker.isRunning():
+            return
+        self.index_content_btn.setEnabled(False)
+        self.index_content_btn.setText("正在构建...")
+        self._content_worker = ContentIndexWorker(self)
+        self._content_worker.finished.connect(self._on_content_index_done)
+        self._content_worker.error.connect(self._on_content_index_error)
+        self._content_worker.start()
+
+    def _on_content_index_done(self, result: dict):
+        self.index_content_btn.setEnabled(True)
+        self.index_content_btn.setText("构建正文索引")
+        self._content_worker = None
+        notify(self, f"正文索引完成：已索引 {result['indexed']}，跳过 {result['skipped']}，失败 {result['failed']}", 'success', 5000)
+
+    def _on_content_index_error(self, error: str):
+        self.index_content_btn.setEnabled(True)
+        self.index_content_btn.setText("构建正文索引")
+        self._content_worker = None
+        QMessageBox.warning(self, "正文索引失败", error)
+
+    def _do_content_search(self):
+        query = self._search_params.get('name') or self.nl_input.text().strip()
+        if not query:
+            QMessageBox.information(self, "搜索正文", "请输入要在文档正文中查找的关键词")
+            return
+        records = self.content_dao.search(query, limit=1000)
+        def matches(record):
+            if self._search_params.get('file_type') and record.get('file_type') != self._search_params['file_type']:
+                return False
+            if self._search_params.get('min_size') is not None and record.get('file_size', 0) < self._search_params['min_size']:
+                return False
+            if self._search_params.get('max_size') is not None and record.get('file_size', 0) > self._search_params['max_size']:
+                return False
+            if self._search_params.get('is_duplicate') is not None and record.get('is_duplicate') != self._search_params['is_duplicate']:
+                return False
+            modified = str(record.get('modify_time') or '')
+            if self._search_params.get('start_date') and modified < self._search_params['start_date']:
+                return False
+            if self._search_params.get('end_date') and modified > self._search_params['end_date']:
+                return False
+            return True
+        self._content_results = [record for record in records if matches(record)]
+        self._content_mode = True
+        self.total_count = len(self._content_results)
         self.current_page = 0
         self._load_page()
 
@@ -251,6 +443,10 @@ class SearchTab(QWidget):
         if not self._search_params:
             return
 
+        if self._content_mode:
+            start = self.current_page * self.page_size
+            self._populate_results(self._content_results[start:start + self.page_size])
+            return
         # AI 来源的结果也用正常分页
         self._search_params.pop("_ai_mode", None)
         self._search_params.pop("_ai_files", None)
@@ -266,7 +462,8 @@ class SearchTab(QWidget):
             self._populate_results(page_files)
         except Exception as e:
             logger.error(f"搜索失败: {e}")
-            QMessageBox.critical(self, "搜索错误", str(e))
+            self.result_table.setVisible(False)
+            self._empty_state.show_error(f"搜索请求失败：{e}")
 
     def _populate_results(self, files):
         total = self.total_count
@@ -280,7 +477,9 @@ class SearchTab(QWidget):
         if self.current_page >= total_pages:
             self.current_page = total_pages - 1
 
+        self.result_table.setSortingEnabled(False)
         self.result_table.setRowCount(len(files))
+        self._current_files = {f['id']: f for f in files}
         total_size = 0
 
         for i, f in enumerate(files):
@@ -311,6 +510,9 @@ class SearchTab(QWidget):
             is_dup = "是" if f.get('is_duplicate') else "否"
             self.result_table.setItem(i, 6, QTableWidgetItem(is_dup))
 
+        self.result_table.setSortingEnabled(True)
+        self._sort_current_page()
+
         self.result_label.setText(f"共 {total} 个文件")
         self.total_size_label.setText(f"当前页: {format_size(total_size)}")
 
@@ -319,6 +521,126 @@ class SearchTab(QWidget):
         self.prev_page_btn.setEnabled(self.current_page > 0)
         self.next_page_btn.setEnabled(self.current_page < total_pages - 1)
         self.export_btn.setVisible(total > 0)
+        self.result_detail.setText(
+            "选择一个文件查看路径、大小和修改时间" if total else "没有可显示的搜索结果")
+
+    def _update_filter_summary(self):
+        labels = []
+        if self._search_params.get('name'):
+            labels.append(f"名称: {self._search_params['name']}")
+        if self._search_params.get('file_type'):
+            labels.append(f"类型: {FILE_TYPE_NAMES.get(self._search_params['file_type'], self._search_params['file_type'])}")
+        if self._search_params.get('min_size'):
+            labels.append(f"最小: {format_size(self._search_params['min_size'])}")
+        if self._search_params.get('max_size'):
+            labels.append(f"最大: {format_size(self._search_params['max_size'])}")
+        if self._search_params.get('start_date'):
+            labels.append(f"日期: {self._search_params['start_date'][:10]} 至 {self._search_params['end_date'][:10]}")
+        dup = self._search_params.get('is_duplicate')
+        if dup is not None:
+            labels.append("仅重复文件" if dup else "排除重复文件")
+        self.filter_summary.setText("当前条件：" + (" · ".join(labels) if labels else "全部文件"))
+
+    def _sort_current_page(self):
+        column = self.sort_combo.currentData() if hasattr(self, 'sort_combo') else -1
+        if column is not None and column >= 0:
+            self.result_table.sortItems(column, Qt.SortOrder.AscendingOrder)
+
+    def _update_result_detail(self):
+        rows = self.result_table.selectionModel().selectedRows()
+        if len(rows) != 1:
+            self.result_detail.setText(
+                f"已选择 {len(rows)} 个文件" if rows else "选择一个文件查看路径、大小和修改时间")
+            return
+        item = self.result_table.item(rows[0].row(), 0)
+        record = self._current_files.get(item.data(Qt.ItemDataRole.UserRole)) if item else None
+        if not record:
+            return
+        self.result_detail.setText(
+            f"{record['file_name']}\n{record['file_path']}  ·  "
+            f"{format_size(record.get('file_size', 0))}  ·  修改于 {record.get('modify_time') or '-'}"
+            + (f"\n正文命中：{record['content_snippet']}" if record.get('content_snippet') else ""))
+
+    def _history_values(self):
+        values = self._settings.value("search/history", [], type=list)
+        return [str(value) for value in values if str(value).strip()]
+
+    def _reload_search_history(self):
+        if not hasattr(self, 'history_combo'):
+            return
+        current = self.history_combo.currentText() if self.history_combo.count() else ""
+        self.history_combo.blockSignals(True)
+        self.history_combo.clear()
+        self.history_combo.addItem("选择历史记录...", None)
+        for value in self._history_values():
+            self.history_combo.addItem(value, value)
+        self.history_combo.setCurrentText(current)
+        self.history_combo.blockSignals(False)
+
+    def _remember_search(self, text: str):
+        text = text.strip()
+        if not text:
+            return
+        values = [value for value in self._history_values() if value != text]
+        self._settings.setValue("search/history", [text] + values[:9])
+        self._reload_search_history()
+
+    def _apply_history(self, index: int):
+        value = self.history_combo.itemData(index)
+        if value:
+            self.name_input.setText(value)
+            self._do_search()
+
+    def _clear_search_history(self):
+        self._settings.remove("search/history")
+        self._reload_search_history()
+
+    def _collections(self):
+        raw = self._settings.value("search/collections", "[]")
+        try:
+            return json.loads(raw) if isinstance(raw, str) else []
+        except (TypeError, json.JSONDecodeError):
+            return []
+
+    def _reload_collections(self):
+        if not hasattr(self, 'collection_combo'):
+            return
+        self.collection_combo.blockSignals(True)
+        self.collection_combo.clear()
+        self.collection_combo.addItem("选择已保存的集合...", None)
+        for collection in self._collections():
+            self.collection_combo.addItem(collection.get('name', '未命名集合'), collection)
+        self.collection_combo.blockSignals(False)
+
+    def _save_collection(self):
+        if not self._search_params:
+            QMessageBox.information(self, "保存智能集合", "请先执行一次搜索")
+            return
+        name, ok = QInputDialog.getText(self, "保存智能集合", "集合名称:")
+        if not ok or not name.strip():
+            return
+        params = {key: value for key, value in self._search_params.items()
+                  if not key.startswith('_')}
+        collections = [item for item in self._collections() if item.get('name') != name.strip()]
+        collections.append({'name': name.strip(), 'params': params})
+        self._settings.setValue("search/collections", json.dumps(collections, ensure_ascii=False))
+        self._reload_collections()
+        notify(self, f"已保存智能集合：{name.strip()}", 'success', 3000)
+
+    def _apply_collection(self, index: int):
+        collection = self.collection_combo.itemData(index)
+        if collection:
+            self._apply_search_params(collection.get('params', {}), source="智能集合")
+
+    def _delete_collection(self):
+        index = self.collection_combo.currentIndex()
+        collection = self.collection_combo.itemData(index)
+        if not collection:
+            QMessageBox.information(self, "删除智能集合", "请先选择一个集合")
+            return
+        collections = [item for item in self._collections() if item.get('name') != collection.get('name')]
+        self._settings.setValue("search/collections", json.dumps(collections, ensure_ascii=False))
+        self._reload_collections()
 
     def _prev_page(self):
         if self.current_page > 0:
@@ -342,6 +664,7 @@ class SearchTab(QWidget):
 
         params = self.nl_parser.parse(query)
         if params:
+            self._remember_search(query)
             self._apply_search_params(params, source="规则")
         else:
             self.result_label.setText("无法解析，请尝试更明确的描述或使用高级搜索条件。")
@@ -384,6 +707,8 @@ class SearchTab(QWidget):
 
         self.current_page = 0
         self.total_count = 0
+        self._update_filter_summary()
+        self._set_advanced_filters_expanded(False)
         self._load_page()
         explanation = params.get('explanation', '')
         source_text = f" ({source})" if source else ""
@@ -402,7 +727,13 @@ class SearchTab(QWidget):
         self.current_page = 0
         self.total_count = 0
         self._search_params = {}
+        self._content_mode = False
+        self._content_results = []
+        self.content_search_cb.setChecked(False)
+        self._current_files = {}
         self.result_table.setRowCount(0)
+        self.result_table.setVisible(False)
+        self._empty_state.show_empty()
         self.result_label.setText("请输入搜索条件")
         self.result_label.setStyleSheet("")
         self.total_size_label.setText("")
@@ -410,6 +741,8 @@ class SearchTab(QWidget):
         self.prev_page_btn.setEnabled(False)
         self.next_page_btn.setEnabled(False)
         self.export_btn.setVisible(False)
+        self.filter_summary.setText("当前条件：未设置")
+        self.result_detail.setText("选择一个文件查看路径、大小和修改时间")
 
     def display_ai_results(self, result: dict):
         """接收 AI 搜索结果，通过数据库分页展示到表格"""

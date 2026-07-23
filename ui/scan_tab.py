@@ -4,7 +4,7 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QFileDialog, QProgressBar, QTableWidget, QTableWidgetItem,
-    QCheckBox, QMessageBox, QHeaderView, QApplication
+    QCheckBox, QMessageBox, QHeaderView, QApplication, QFrame, QTextEdit
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
@@ -13,6 +13,7 @@ from core import FileScanWorker
 from core.batch_classifier import BatchClassifyWorker
 from core.file_watcher import WatcherManager
 from core.rule_engine import CleanupAdvisor
+from core.content_indexer import ContentIndexer
 from database.db_manager import db
 from database.models import FileDAO, MetadataDAO, ScanDirectoryDAO, TagDAO, ClassificationDAO
 from utils.display_utils import truncate_path, format_size
@@ -39,17 +40,37 @@ class CleanupAnalysisWorker(QThread):
             self.error.emit(str(exc))
 
 
+class ContentIndexWorker(QThread):
+    done = pyqtSignal(dict)
+    error = pyqtSignal(str)
+
+    def __init__(self, directory: str, parent=None):
+        super().__init__(parent)
+        self.directory = directory
+
+    def run(self):
+        try:
+            records = FileDAO(db).get_by_directory(self.directory)
+            self.done.emit(ContentIndexer().index_records(records))
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
 class ScanTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.scan_worker = None
         self.post_worker = None
         self.cleanup_worker = None
+        self.content_index_worker = None
+        self._pending_content_index = False
         self.file_dao = FileDAO(db)
         self.metadata_dao = MetadataDAO(db)
         self.scan_dao = ScanDirectoryDAO(db)
         self._watcher_mgr = WatcherManager.get_instance()
         self._theme = 'dark'
+        self._scan_issues = []
+        self._last_scan_report = {}
         self._init_ui()
 
     def _init_ui(self):
@@ -94,6 +115,10 @@ class ScanTab(QWidget):
         self.metadata_cb = QCheckBox("提取文件元数据")
         self.metadata_cb.setChecked(True)
         opts_layout.addWidget(self.metadata_cb)
+
+        self.content_index_cb = QCheckBox("建立正文索引")
+        self.content_index_cb.setToolTip("索引文本、PDF 和 DOCX 正文，仅保存在本机")
+        opts_layout.addWidget(self.content_index_cb)
 
         opts_layout.addStretch()
         layout.addLayout(opts_layout)
@@ -142,6 +167,25 @@ class ScanTab(QWidget):
         self.eta_label.setVisible(False)
         layout.addWidget(self.eta_label)
 
+        self.scan_summary = QFrame()
+        self.scan_summary.setObjectName("scanSummaryPanel")
+        summary_layout = QVBoxLayout(self.scan_summary)
+        summary_layout.setContentsMargins(12, 10, 12, 10)
+        self.summary_title = QLabel("本次扫描结果")
+        self.summary_title.setObjectName("scanDirectoryTitle")
+        summary_layout.addWidget(self.summary_title)
+        self.summary_values = QLabel("")
+        self.summary_values.setObjectName("subtitleLabel")
+        self.summary_values.setWordWrap(True)
+        summary_layout.addWidget(self.summary_values)
+        self.issue_details = QTextEdit()
+        self.issue_details.setReadOnly(True)
+        self.issue_details.setMaximumHeight(100)
+        self.issue_details.setPlaceholderText("本次扫描没有发现问题")
+        summary_layout.addWidget(self.issue_details)
+        self.scan_summary.setVisible(False)
+        layout.addWidget(self.scan_summary)
+
         # 已配置扫描目录列表
         self.dir_title = QLabel("已配置扫描目录")
         self.dir_title.setObjectName("scanDirectoryTitle")
@@ -159,7 +203,8 @@ class ScanTab(QWidget):
         layout.addWidget(self.dir_table)
 
         # 空状态引导
-        self._empty_state = create_empty_state('scan', parent=self)
+        self._empty_state = create_empty_state(
+            'scan', "重试加载", self.refresh_data, parent=self)
         layout.addWidget(self._empty_state)
 
         self.refresh_data()
@@ -180,6 +225,10 @@ class ScanTab(QWidget):
         self.progress_bar.setVisible(True)
         self.progress_label.setVisible(True)
         self.progress_bar.setValue(0)
+        self._scan_issues = []
+        self._last_scan_report = {}
+        self.scan_summary.setVisible(False)
+        self.issue_details.clear()
 
         self.scan_worker = FileScanWorker(
             dir_path,
@@ -191,6 +240,8 @@ class ScanTab(QWidget):
         self.scan_worker.finished.connect(self._on_scan_finished)
         self.scan_worker.error.connect(self._on_scan_error)
         self.scan_worker.cancelled.connect(self._on_scan_cancelled)
+        self.scan_worker.issue.connect(self._on_scan_issue)
+        self.scan_worker.report.connect(self._on_scan_report)
         self.scan_worker.start()
 
         self.eta_label.setVisible(True)
@@ -259,6 +310,22 @@ class ScanTab(QWidget):
         """显示扫描 ETA"""
         self.eta_label.setText(f"⏱ 预计剩余: {eta_str}")
 
+    def _on_scan_issue(self, path: str, reason: str):
+        self._scan_issues.append((path, reason))
+        if len(self._scan_issues) <= 100:
+            self.issue_details.append(f"{truncate_path(path, 70)}\n  {reason}")
+
+    def _on_scan_report(self, report: dict):
+        self._last_scan_report = dict(report or {})
+        issues = len(self._scan_issues)
+        self.summary_values.setText(
+            f"发现 {report.get('total', 0)} 个 · 新增 {report.get('new', 0)} 个 · "
+            f"更新 {report.get('updated', 0)} 个 · 未变化/跳过 {report.get('skipped', 0)} 个 · "
+            f"问题 {issues} 个")
+        if issues > 100:
+            self.issue_details.append(f"还有 {issues - 100} 条问题未显示，请查看应用日志。")
+        self.scan_summary.setVisible(True)
+
     def _on_scan_finished(self, new_count, total):
         self.scan_worker = None
         self.scan_btn.setEnabled(True)
@@ -270,6 +337,7 @@ class ScanTab(QWidget):
 
         do_meta = self.metadata_cb.isChecked()
         do_cls = self.classify_cb.isChecked()
+        self._pending_content_index = self.content_index_cb.isChecked()
         if do_meta or do_cls:
             self.progress_label.setVisible(True)
             self.progress_bar.setVisible(True)
@@ -289,10 +357,7 @@ class ScanTab(QWidget):
             self.post_worker.error.connect(self._on_post_error)
             self.post_worker.start()
         else:
-            self.progress_label.setVisible(False)
-            self.refresh_data()
-            # 扫描完成后启动文件监控
-            self._start_watching()
+            self._start_content_index_or_finish()
 
     def _on_post_progress(self, current, total):
         self.progress_bar.setMaximum(total)
@@ -301,11 +366,41 @@ class ScanTab(QWidget):
 
     def _on_post_finished(self):
         self.stats_label.setText("后处理完成")
+        self._start_content_index_or_finish()
+
+    def _start_content_index_or_finish(self):
+        if not self._pending_content_index:
+            self._finish_scan_pipeline()
+            return
+        directory = self.path_label.text()
+        self.progress_label.setVisible(True)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)
+        self.progress_label.setText("正在建立正文索引...")
+        self.content_index_worker = ContentIndexWorker(directory, self)
+        self.content_index_worker.done.connect(self._on_content_index_done)
+        self.content_index_worker.error.connect(self._on_content_index_error)
+        self.content_index_worker.start()
+
+    def _on_content_index_done(self, result):
+        self._pending_content_index = False
+        self.content_index_worker = None
+        self.summary_values.setText(self.summary_values.text() +
+            f"\n正文索引：已索引 {result['indexed']} 个，跳过 {result['skipped']} 个，失败 {result['failed']} 个")
+        self._finish_scan_pipeline()
+
+    def _on_content_index_error(self, error):
+        self._pending_content_index = False
+        self.content_index_worker = None
+        self._on_scan_issue(self.path_label.text(), f"正文索引失败: {error}")
+        self._finish_scan_pipeline()
+
+    def _finish_scan_pipeline(self):
+        self.progress_bar.setRange(0, 100)
         self.progress_label.setVisible(False)
         self.progress_bar.setVisible(False)
         self.refresh_data()
-        notify(self, "后处理完成", 'success', 3000)
-        # 后处理完成后启动文件监控
+        notify(self, "扫描后处理完成", 'success', 3000)
         self._start_watching()
 
     def _on_post_error(self, msg):
@@ -323,6 +418,9 @@ class ScanTab(QWidget):
         self.progress_bar.setVisible(False)
         self.progress_label.setVisible(False)
         self.eta_label.setVisible(False)
+        self._on_scan_issue(self.path_label.text(), error)
+        self.summary_values.setText(f"扫描失败 · 已记录 {len(self._scan_issues)} 个问题")
+        self.scan_summary.setVisible(True)
         QMessageBox.critical(self, "扫描错误", f"扫描过程中发生错误:\n{error}")
 
     def refresh_data(self):
@@ -350,9 +448,17 @@ class ScanTab(QWidget):
             self.stats_label.setText(f"数据库中共 {total} 个文件")
         except Exception as e:
             logger.error(f"刷新数据失败: {e}")
+            self.dir_table.setVisible(False)
+            self._empty_state.show_error(f"无法读取扫描目录：{e}")
+            return
 
         # 空状态检测
-        self._empty_state.setVisible(self.dir_table.rowCount() == 0)
+        if self.dir_table.rowCount() == 0:
+            self.dir_table.setVisible(False)
+            self._empty_state.show_empty()
+        else:
+            self.dir_table.setVisible(True)
+            self._empty_state.setVisible(False)
         
         # 注意：不在这里启动文件监控，应该在扫描完成后启动
         # self._start_watching()  # 已移除
@@ -397,3 +503,18 @@ class ScanTab(QWidget):
             logger.info(f"检测到文件变化，已提示用户: {dir_path}")
         except Exception as e:
             logger.warning(f"自动扫描提示失败: {e}")
+
+    def apply_theme(self, theme_name: str):
+        self._theme = theme_name
+        dark = theme_name == 'dark'
+        surface = '#1a1a2e' if dark else '#ffffff'
+        border = '#2a2a3e' if dark else '#e2e8f0'
+        text = '#e8e8ef' if dark else '#0f172a'
+        muted = '#a0a0b0' if dark else '#64748b'
+        self.scan_summary.setStyleSheet(
+            f"QFrame#scanSummaryPanel {{ background-color: {surface}; "
+            f"border: 1px solid {border}; border-radius: 6px; }}")
+        self.summary_values.setStyleSheet(
+            f"color: {muted}; background: transparent; border: none;")
+        self.issue_details.setStyleSheet(
+            f"background-color: {surface}; color: {text}; border: 1px solid {border};")
