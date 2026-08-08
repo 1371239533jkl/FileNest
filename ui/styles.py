@@ -167,6 +167,16 @@ QPushButton#dangerBtn {
 QPushButton#dangerBtn:hover {
     background-color: #dc2626;
 }
+/* 表格内的紧凑危险操作：两种主题都保持实心红色。 */
+QPushButton#scanDeleteBtn {
+    background-color: #e11d48;
+    color: #ffffff;
+    border: none;
+    border-radius: 4px;
+    font-size: 11px;
+    padding: 0;
+}
+QPushButton#scanDeleteBtn:hover { background-color: #be123c; }
 QPushButton#successBtn {
     background-color: #10b981;
     color: #ffffff;
@@ -474,7 +484,7 @@ QPushButton#scanDeleteBtn {
     border: none;
     border-radius: 4px;
     font-size: 11px;
-    padding: 0 2px;
+    padding: 0;
 }
 QPushButton#scanDeleteBtn:hover { background-color: #be123c; }
 QWidget#appCentral, QStackedWidget#contentPanel {
@@ -882,7 +892,7 @@ QPushButton#scanDeleteBtn {
     border: none;
     border-radius: 4px;
     font-size: 11px;
-    padding: 0 2px;
+    padding: 0;
 }
 QPushButton#scanDeleteBtn:hover { background-color: #be123c; }
 

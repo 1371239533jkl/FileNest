@@ -184,18 +184,29 @@ class ScanTab(QWidget):
         self.scan_summary.setObjectName("scanSummaryPanel")
         summary_layout = QVBoxLayout(self.scan_summary)
         summary_layout.setContentsMargins(12, 10, 12, 10)
+        summary_header = QHBoxLayout()
         self.summary_title = QLabel("本次扫描结果")
         self.summary_title.setObjectName("scanDirectoryTitle")
-        summary_layout.addWidget(self.summary_title)
+        summary_header.addWidget(self.summary_title)
+        summary_header.addStretch()
+        self.summary_close_btn = QPushButton("×")
+        self.summary_close_btn.setFixedSize(28, 28)
+        self.summary_close_btn.setToolTip("关闭本次扫描结果")
+        self.summary_close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.summary_close_btn.clicked.connect(self._dismiss_scan_summary)
+        summary_header.addWidget(self.summary_close_btn)
+        summary_layout.addLayout(summary_header)
         self.summary_values = QLabel("")
         self.summary_values.setObjectName("subtitleLabel")
         self.summary_values.setWordWrap(True)
         summary_layout.addWidget(self.summary_values)
         self.issue_details = QTextEdit()
         self.issue_details.setReadOnly(True)
-        self.issue_details.setMaximumHeight(100)
+        self.issue_details.setFixedHeight(88)
         self.issue_details.setPlaceholderText("本次扫描没有发现问题")
         summary_layout.addWidget(self.issue_details)
+        self.issue_details.setVisible(False)
+        self.scan_summary.setMaximumHeight(110)
         self.scan_summary.setVisible(False)
         layout.addWidget(self.scan_summary)
 
@@ -208,8 +219,9 @@ class ScanTab(QWidget):
         self.dir_table.setColumnCount(5)
         self.dir_table.setHorizontalHeaderLabels(["目录路径", "递归", "文件数", "最后扫描", "操作"])
         self.dir_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.dir_table.setColumnWidth(4, 65)
-        self.dir_table.verticalHeader().setDefaultSectionSize(36)
+        self.dir_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self.dir_table.setColumnWidth(4, 88)
+        self.dir_table.verticalHeader().setDefaultSectionSize(41)
         self.dir_table.verticalHeader().setVisible(False)
         self.dir_table.setAlternatingRowColors(True)
         self.dir_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -241,6 +253,7 @@ class ScanTab(QWidget):
         self._scan_issues = []
         self._last_scan_report = {}
         self.scan_summary.setVisible(False)
+        self.issue_details.setVisible(False)
         self.issue_details.clear()
 
         self.scan_worker = FileScanWorker(
@@ -372,9 +385,16 @@ class ScanTab(QWidget):
             f"发现 {report.get('total', 0)} 个 · 新增 {report.get('new', 0)} 个 · "
             f"更新 {report.get('updated', 0)} 个 · 未变化/跳过 {report.get('skipped', 0)} 个 · "
             f"问题 {issues} 个")
+        has_issues = issues > 0
+        self.issue_details.setVisible(has_issues)
+        self.scan_summary.setMaximumHeight(210 if has_issues else 110)
         if issues > 100:
             self.issue_details.append(f"还有 {issues - 100} 条问题未显示，请查看应用日志。")
         self.scan_summary.setVisible(True)
+
+    def _dismiss_scan_summary(self):
+        """Hide the transient result panel without affecting saved scan data."""
+        self.scan_summary.setVisible(False)
 
     def _on_scan_finished(self, new_count, total):
         self.scan_worker = None
@@ -481,6 +501,7 @@ class ScanTab(QWidget):
             dirs = self.scan_dao.get_all()
             self.dir_table.setRowCount(len(dirs))
             for i, d in enumerate(dirs):
+                self.dir_table.setRowHeight(i, 41)
                 self.dir_table.setItem(i, 0, QTableWidgetItem("📁 " + d['directory_path']))
                 self.dir_table.setItem(i, 1, QTableWidgetItem("是" if d['scan_recursive'] else "否"))
                 self.dir_table.setItem(i, 2, QTableWidgetItem(str(d.get('file_count', 0))))
@@ -488,11 +509,18 @@ class ScanTab(QWidget):
                 self.dir_table.setItem(i, 3, QTableWidgetItem(
                     str(scan_time) if scan_time else "未扫描"))
 
+                action_cell = QWidget()
+                action_layout = QHBoxLayout(action_cell)
+                action_layout.setContentsMargins(0, 0, 0, 0)
+                action_layout.setSpacing(0)
+                action_layout.addStretch()
                 del_btn = QPushButton("删除")
                 del_btn.setFixedSize(56, 24)
                 del_btn.setObjectName("scanDeleteBtn")
                 del_btn.clicked.connect(lambda _, did=d['id']: self._delete_directory(did))
-                self.dir_table.setCellWidget(i, 4, del_btn)
+                action_layout.addWidget(del_btn)
+                action_layout.addStretch()
+                self.dir_table.setCellWidget(i, 4, action_cell)
 
             # 更新统计
             stats = self.file_dao.get_type_stats()

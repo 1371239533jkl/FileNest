@@ -39,6 +39,11 @@ __pycache__/
 # 系统文件
 Thumbs.db
 .DS_Store
-".codegraph/" 
-.codegraph/ 
-.codegraph/ 
+
+# PyInstaller 构建产物
+build/
+build-lite/
+dist/
+dist-lite/
+*.spec
+pyinstaller*.log

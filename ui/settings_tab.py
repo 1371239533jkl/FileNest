@@ -4,8 +4,9 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QStackedWidget,
     QPushButton, QLabel, QLineEdit, QComboBox, QCheckBox,
-    QSpinBox, QFormLayout, QGroupBox, QMessageBox
+    QSpinBox, QFormLayout, QGroupBox, QMessageBox, QInputDialog
 )
+from PyQt6.QtCore import QSettings
 
 from config import DEDUP_STRATEGIES, DB_PATH
 from database.db_manager import db
@@ -13,6 +14,7 @@ from database.models import SystemSettingsDAO
 from utils.logger import logger
 from ui.toast import notify
 from core.ai_model_config import AIModelConfigManager
+from core.data_reset import AppDataResetService
 
 
 class SettingsTab(QWidget):
@@ -83,6 +85,20 @@ class SettingsTab(QWidget):
         db_layout.addRow("文件大小:", QLabel(db_size))
         db_layout.addRow("引擎:", QLabel("SQLite (WAL 模式)"))
         layout.addWidget(db_group)
+
+        reset_group = QGroupBox("数据管理")
+        reset_layout = QVBoxLayout(reset_group)
+        reset_hint = QLabel(
+            "重置会清除本应用的文件索引、扫描目录、标签、分类、操作历史和正文索引。"
+            "不会删除电脑上的原始文件，也不会删除 AI 配置。")
+        reset_hint.setWordWrap(True)
+        reset_layout.addWidget(reset_hint)
+        self.reset_data_btn = QPushButton("重置应用数据")
+        self.reset_data_btn.setObjectName("dangerBtn")
+        self.reset_data_btn.setToolTip("仅清除本应用保存的索引和记录，不删除原始文件")
+        self.reset_data_btn.clicked.connect(self._reset_app_data)
+        reset_layout.addWidget(self.reset_data_btn)
+        layout.addWidget(reset_group)
 
         # 操作按钮行
         btn_row = QHBoxLayout()
@@ -359,6 +375,46 @@ class SettingsTab(QWidget):
                 self.ai_model_label.setText("-")
         except Exception as e:
             logger.warning(f"加载 AI 设置失败: {e}")
+
+    def _reset_app_data(self):
+        """Double-confirm destructive local-record reset without touching source files."""
+        try:
+            preview = AppDataResetService().preview()
+        except Exception as exc:
+            QMessageBox.critical(self, "重置应用数据", f"无法读取当前数据：{exc}")
+            return
+        details = "\n".join(f"- {name}：{count}" for name, count in preview.items())
+        first = QMessageBox.warning(
+            self, "重置应用数据",
+            "将永久清除以下应用记录：\n\n" + details +
+            "\n\n不会删除电脑上的原始文件，也不会清空应用回收区中的文件。"
+            "\n\n是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if first != QMessageBox.StandardButton.Yes:
+            return
+        confirmation, ok = QInputDialog.getText(
+            self, "最终确认", "请输入 RESET 确认清空应用记录：")
+        if not ok or confirmation.strip().upper() != 'RESET':
+            notify(self, "已取消重置", 'info', 2500)
+            return
+        try:
+            AppDataResetService().reset()
+            settings = QSettings("FileNest", "FileNest")
+            settings.remove("search/history")
+            settings.remove("search/collections")
+            main_window = self.window()
+            if hasattr(main_window, 'scan_tab'):
+                main_window.scan_tab._watcher_mgr.disable()
+            if hasattr(main_window, 'stack'):
+                for index in range(main_window.stack.count()):
+                    page = main_window.stack.widget(index)
+                    if hasattr(page, 'refresh_data'):
+                        page.refresh_data()
+            notify(self, "应用数据已重置，原始文件未受影响", 'success', 4000)
+        except Exception as exc:
+            logger.exception("重置应用数据失败")
+            QMessageBox.critical(self, "重置应用数据", f"重置失败：{exc}")
 
     def refresh_data(self):
         self._load_settings()

@@ -12,4 +12,5 @@ from core.file_watcher import DirectoryWatcher
 from core.rule_engine import NLSearchParser, TagRecommender, CleanupAdvisor
 from core.task_manager import TaskManager
 from core.index_health import IndexHealthService
+from core.data_reset import AppDataResetService
 from core.ai_model_config import AIModelConfigManager

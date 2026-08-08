@@ -73,7 +73,9 @@ class DashboardTab(QWidget):
         self._grid.setSpacing(16)
 
         # ── 统计卡片行 (4 列) ──
-        cards_layout = QHBoxLayout()
+        cards_widget = QWidget()
+        cards_layout = QHBoxLayout(cards_widget)
+        cards_layout.setContentsMargins(0, 0, 0, 0)
         cards_layout.setSpacing(16)
 
         self.card_total_files = StatCard("总文件数", "-", '#3b82f6', '▢')
@@ -85,7 +87,7 @@ class DashboardTab(QWidget):
         cards_layout.addWidget(self.card_classified)
         cards_layout.addWidget(self.card_tags)
         cards_layout.addWidget(self.card_storage)
-        self._grid.addLayout(cards_layout)
+        self._grid.addWidget(cards_widget)
         self.card_total_files.clicked.connect(lambda: self._navigate(2))
         self.card_classified.clicked.connect(lambda: self._navigate(2))
         self.card_tags.clicked.connect(lambda: self._navigate(8))
@@ -111,7 +113,9 @@ class DashboardTab(QWidget):
         self._grid.addWidget(pending_card)
 
         # ── 中间行：AI 洞察 + 类型分布 + 最近活动 ──
-        mid_row = QHBoxLayout()
+        mid_widget = QWidget()
+        mid_row = QHBoxLayout(mid_widget)
+        mid_row.setContentsMargins(0, 0, 0, 0)
         mid_row.setSpacing(16)
 
         # AI 洞察卡片 — 始终显示，AI 不可用时显示占位提示
@@ -155,10 +159,12 @@ class DashboardTab(QWidget):
         activity_layout.addStretch()
         mid_row.addWidget(activity_card, 1)
 
-        self._grid.addLayout(mid_row)
+        self._grid.addWidget(mid_widget)
 
         # ── 底部行：趋势图 + 快捷操作 ──
-        bottom_row = QHBoxLayout()
+        bottom_widget = QWidget()
+        bottom_row = QHBoxLayout(bottom_widget)
+        bottom_row.setContentsMargins(0, 0, 0, 0)
         bottom_row.setSpacing(16)
 
         # 文件增长趋势
@@ -193,7 +199,7 @@ class DashboardTab(QWidget):
         quick_layout.addStretch()
         bottom_row.addWidget(quick_card, 1)
 
-        self._grid.addLayout(bottom_row)
+        self._grid.addWidget(bottom_widget)
 
         # ── 空间占用排行：帮助用户快速定位可清理的目录 ──
         self.directory_usage = BarChartWidget()
@@ -205,7 +211,9 @@ class DashboardTab(QWidget):
         layout.addWidget(scroll, 1)
 
         # 空状态引导
-        self._empty_state = create_empty_state('dashboard', parent=self._content)
+        self._empty_state = create_empty_state(
+            'dashboard', '开始扫描', self._on_quick_scan, parent=self._content)
+        self._empty_state.setMinimumHeight(360)
         self._grid.insertWidget(0, self._empty_state)
         
         # 连接快捷操作
@@ -214,7 +222,15 @@ class DashboardTab(QWidget):
         self.btn_quick_ai.clicked.connect(self._on_quick_ai)
         self._theme_cards = [pending_card, insight_card, activity_card, quick_card,
                              self.pie_type, self.trend_monthly, self.directory_usage]
+        self._data_sections = [cards_widget, pending_card, mid_widget, bottom_widget,
+                               self.directory_usage]
         self.apply_theme('dark')
+
+    def _set_empty_mode(self, is_empty: bool):
+        """Avoid mixing an onboarding state with empty charts and zero-value cards."""
+        self._empty_state.setVisible(is_empty)
+        for section in self._data_sections:
+            section.setVisible(not is_empty)
 
     def apply_theme(self, theme_name: str):
         """Update widgets with local styles that global QSS cannot override."""
@@ -252,7 +268,7 @@ class DashboardTab(QWidget):
 
         # 空状态检测
         if total_files == 0:
-            self._empty_state.setVisible(True)
+            self._set_empty_mode(True)
             self._insight_widget.setVisible(True)
             self.insight_label.setText("暂无文件数据，请先扫描目录。")
             self._clear_activity_list()
@@ -268,7 +284,7 @@ class DashboardTab(QWidget):
             return
 
 
-        self._empty_state.setVisible(False)
+        self._set_empty_mode(False)
 
         total_size = self.file_dao.get_total_size()
         dup_groups = self.file_dao.count_duplicate_groups()
