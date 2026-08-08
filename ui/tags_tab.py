@@ -182,12 +182,19 @@ class TagsTab(QWidget):
 
         sp.addWidget(right)
         sp.setSizes([180, 820])
+        self._content_splitter = sp
         layout.addWidget(sp, 1)
 
         # 空状态引导
         self._empty_state = create_empty_state(
-            'tags', "重试加载", self.refresh_data, parent=self)
+            'tags', "开始扫描", self._navigate_to_scan, parent=self)
+        self._empty_state.setMinimumHeight(300)
         layout.addWidget(self._empty_state)
+
+    def _navigate_to_scan(self):
+        main_window = self.window()
+        if hasattr(main_window, 'switch_to_tab'):
+            main_window.switch_to_tab(1)
 
     # ── 标签云构建 ──
 
@@ -199,11 +206,7 @@ class TagsTab(QWidget):
         palette = _TAG_LIGHT if self._theme == 'light' else _TAG_COLORS
 
         # 空状态检测
-        has_tags = len(tags) > 0
-        if has_tags:
-            self._empty_state.setVisible(False)
-        else:
-            self._empty_state.show_empty()
+        self._has_tags = bool(tags)
 
         # 全部文件 —— 使用调色板配色，与普通标签风格统一
         all_bg, all_fg = ('#585b70', '#cdd6f4') if self._theme == 'light' else ('#45475a', '#cdd6f4')
@@ -298,10 +301,15 @@ class TagsTab(QWidget):
         self.tbl.clearSelection()
         self.current_files = files
         self.tbl.setVisible(bool(files))
-        if files:
-            self._empty_state.setVisible(False)
-        else:
+        # First use should present one clear next step. Once files or tags
+        # exist, keep the normal management view available even if a filter
+        # happens to return no rows.
+        first_use_empty = self._total_count == 0 and not self._has_tags
+        self._content_splitter.setVisible(not first_use_empty)
+        if first_use_empty:
             self._empty_state.show_empty()
+        else:
+            self._empty_state.setVisible(False)
         total_pages = max(1, (self._total_count + self.page_size - 1) // self.page_size)
         if self.current_page >= total_pages:
             self.current_page = total_pages - 1
