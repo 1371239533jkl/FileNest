@@ -75,6 +75,16 @@ class FileDAO:
         return self.db.execute_update(
             "UPDATE files SET file_hash = ? WHERE id = ?", (file_hash, file_id))
 
+    def get_content_fingerprint(self, file_id: int) -> Optional[str]:
+        row = self.db.execute_one(
+            "SELECT content_fingerprint FROM files WHERE id = ?", (file_id,))
+        return row['content_fingerprint'] if row else None
+
+    def update_content_fingerprint(self, file_id: int, fingerprint: str) -> int:
+        return self.db.execute_update(
+            "UPDATE files SET content_fingerprint = ? WHERE id = ?",
+            (fingerprint, file_id))
+
     def update_duplicate(self, file_id: int, is_duplicate: int, group_id: int) -> int:
         return self.db.execute_update(
             "UPDATE files SET is_duplicate = ?, duplicate_group_id = ? WHERE id = ?",

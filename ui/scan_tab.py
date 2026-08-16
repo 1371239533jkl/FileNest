@@ -551,17 +551,34 @@ class ScanTab(QWidget):
             notify(self, "扫描目录已删除", 'success', 3000)
 
     def _start_watching(self):
-        """启动文件变化监控"""
+        """启动文件变化监控 + 自动增量落库"""
         try:
             dirs = self.scan_dao.get_all()
             dir_paths = [d['directory_path'] for d in dirs if os.path.isdir(d['directory_path'])]
             if dir_paths:
                 self._watcher_mgr.enable(
                     dir_paths,
-                    scan_callback=self._on_auto_scan_triggered
+                    scan_callback=self._on_auto_scan_triggered,
+                    auto_apply=True,
+                    apply_done_callback=self._on_auto_apply_done
                 )
         except Exception as e:
             logger.debug(f"启动文件监控失败: {e}")
+
+    def _on_auto_apply_done(self, stats: dict):
+        """增量落库完成后：提示结果并刷新数据"""
+        try:
+            applied = stats.get('applied', 0)
+            failed = stats.get('failed', 0)
+            if applied > 0:
+                self.refresh_data()
+            if failed > 0:
+                notify(self, f"增量索引完成：成功 {applied}，失败 {failed}，可手动重扫修复",
+                       'warning', 5000)
+            elif applied > 0:
+                notify(self, f"增量索引已自动更新 {applied} 个文件", 'success', 3000)
+        except Exception as e:
+            logger.warning(f"增量落库完成回调失败: {e}")
 
     def _on_auto_scan_triggered(self):
         """文件变化触发的自动扫描提示"""
