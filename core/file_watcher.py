@@ -4,7 +4,7 @@
 import os
 import threading
 from typing import Optional
-from PyQt6.QtCore import QObject, pyqtSignal, QTimer, Qt, QMetaObject
+from PyQt6.QtCore import QObject, pyqtSignal, QTimer, Qt, QMetaObject, QThread
 
 from utils.logger import logger
 
@@ -12,12 +12,16 @@ from utils.logger import logger
 class FileChangeEvent:
     """文件变化事件"""
     
-    def __init__(self, event_type: str, path: str, is_directory: bool = False):
+    def __init__(self, event_type: str, path: str, is_directory: bool = False,
+                 dest_path: str = ''):
         self.event_type = event_type  # 'created', 'modified', 'deleted', 'moved'
         self.path = path
         self.is_directory = is_directory
+        self.dest_path = dest_path  # moved 事件的目标路径
     
     def __repr__(self):
+        if self.dest_path:
+            return f"FileChangeEvent({self.event_type}, {self.path} -> {self.dest_path})"
         return f"FileChangeEvent({self.event_type}, {self.path})"
 
 
@@ -134,7 +138,13 @@ class DirectoryWatcher(QObject):
         if self._is_ignored(path):
             return
         
-        evt = FileChangeEvent(event_type, path, event.is_directory)
+        dest_path = ''
+        if event_type == 'moved':
+            dest_path = getattr(event, 'dest_path', '') or ''
+            if self._is_ignored(dest_path):
+                return
+        
+        evt = FileChangeEvent(event_type, path, event.is_directory, dest_path)
         with self._events_lock:
             self._pending_events.append(evt)
         
@@ -182,6 +192,9 @@ class WatcherManager:
         self._watcher = DirectoryWatcher()
         self._auto_scan_enabled = False
         self._scan_callback = None
+        self._apply_worker = None
+        self._auto_apply_enabled = False
+        self._apply_done_callback = None
     
     @classmethod
     def get_instance(cls) -> 'WatcherManager':
@@ -189,14 +202,19 @@ class WatcherManager:
             cls._instance = WatcherManager()
         return cls._instance
     
-    def enable(self, directories: list, scan_callback=None):
+    def enable(self, directories: list, scan_callback=None,
+               auto_apply: bool = False, apply_done_callback=None):
         """启用文件监控
         
         Args:
             directories: 要监控的目录列表
             scan_callback: 当检测到变化时调用的函数（通常触发扫描）
+            auto_apply: 是否自动将文件变化增量落库（索引自动更新）
+            apply_done_callback: 增量落库完成后回调（接收统计 dict）
         """
         self._scan_callback = scan_callback
+        self._auto_apply_enabled = auto_apply
+        self._apply_done_callback = apply_done_callback
         self._watcher.files_changed.connect(self._on_files_changed)
         self._watcher.start(directories)
         self._auto_scan_enabled = True
@@ -205,6 +223,15 @@ class WatcherManager:
         """禁用文件监控"""
         self._watcher.stop()
         self._auto_scan_enabled = False
+        self._auto_apply_enabled = False
+        self._apply_done_callback = None
+        if self._apply_worker is not None:
+            try:
+                self._apply_worker.cancel()
+                self._apply_worker.wait(2000)
+            except Exception:
+                pass
+            self._apply_worker = None
         try:
             self._watcher.files_changed.disconnect()
         except TypeError:
@@ -216,6 +243,10 @@ class WatcherManager:
     def _on_files_changed(self, events: list):
         """处理文件变化事件"""
         if not self._auto_scan_enabled or not events:
+            return
+        
+        if self._auto_apply_enabled:
+            self._start_apply_events(events)
             return
         
         created = [e for e in events if e.event_type == 'created']
@@ -235,3 +266,45 @@ class WatcherManager:
         if (created or modified or deleted) and self._scan_callback:
             logger.info("检测到文件变化，通知上层同步...")
             self._scan_callback()
+    
+    def _start_apply_events(self, events: list):
+        """在后台线程执行增量落库，完成后回调。"""
+        if self._apply_worker is not None and self._apply_worker.isRunning():
+            logger.debug("增量落库线程正忙，丢弃本次事件批次")
+            return
+        from core.index_updater import IncrementalIndexUpdater
+        self._apply_worker = _ApplyEventsWorker(events, IncrementalIndexUpdater())
+        self._apply_worker.finished_ok.connect(self._on_apply_done)
+        self._apply_worker.start()
+    
+    def _on_apply_done(self, stats: dict):
+        self._apply_worker = None
+        logger.info(f"增量落库完成: applied={stats['applied']}, failed={stats['failed']}")
+        if self._apply_done_callback:
+            self._apply_done_callback(stats)
+
+
+class _ApplyEventsWorker(QThread):
+    """后台增量落库线程"""
+    finished_ok = pyqtSignal(dict)
+    
+    def __init__(self, events: list, updater, parent=None):
+        super().__init__(parent)
+        self._events = events
+        self._updater = updater
+        self._cancelled = False
+    
+    def cancel(self):
+        self._cancelled = True
+    
+    def run(self):
+        if self._cancelled:
+            return
+        try:
+            stats = self._updater.apply(self._events)
+            if not self._cancelled:
+                self.finished_ok.emit(stats)
+        except Exception as exc:
+            logger.error(f"增量落库线程异常: {exc}")
+            self.finished_ok.emit({'applied': 0, 'failed': len(self._events),
+                                   'errors': [str(exc)]})

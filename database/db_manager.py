@@ -95,6 +95,20 @@ class DBManager:
             conn.rollback()
             raise e
 
+    def _migrate_files_columns(self, conn):
+        """为旧版 files 表补充缺失列（SQLite ALTER TABLE ADD COLUMN 不支持 IF NOT EXISTS）。
+
+        新装的库由建表语句直接包含；升级的库通过这里补齐，保证幂等。
+        """
+        try:
+            cols = [row['name'] for row in conn.execute("PRAGMA table_info(files)").fetchall()]
+            if 'content_fingerprint' not in cols:
+                conn.execute("ALTER TABLE files ADD COLUMN content_fingerprint TEXT")
+                logger.info("迁移: files 表新增 content_fingerprint 列")
+            conn.commit()
+        except Exception as e:
+            logger.warning(f"files 表列迁移跳过: {e}")
+
     def init_database(self):
         """创建数据库表结构（幂等：CREATE TABLE IF NOT EXISTS）"""
         conn = self._get_local_connection()
@@ -114,6 +128,7 @@ class DBManager:
                 scan_time       TEXT            NOT NULL,
                 is_duplicate    INTEGER         DEFAULT 0,
                 duplicate_group_id INTEGER,
+                content_fingerprint TEXT,
                 status          TEXT            DEFAULT 'active'
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_file_path ON files(file_path);
@@ -238,6 +253,9 @@ class DBManager:
             );
         """)
         conn.commit()
+
+        # === 轻量迁移：为已存在的 files 表补充列（幂等）===
+        self._migrate_files_columns(conn)
 
         # === FTS5 触发器（幂等：DROP IF EXISTS 后重建）===
         conn.executescript("""

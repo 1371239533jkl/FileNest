@@ -13,10 +13,10 @@
 
 | 编号 | 功能 | 状态 | 现有实现（证据） | 缺口 |
 |---|---|---|---|---|
-| P0-01 | 实时增量索引 | 🔶 | `core/file_watcher.py`：watchdog 监控、2s 防抖合并事件、忽略规则；`scan_tab.py` 变化提示 | 仅"提示手动扫描"，未自动落库；无失败重试 |
+| P0-01 | 实时增量索引 | ✅ | `core/file_watcher.py`：watchdog 监控、2s 防抖合并事件、忽略规则；新增 `core/index_updater.py`（事件合并/自动落库/失败重试）；`scan_tab.py` 接入自动落库与完成回调 | — |
 | P0-02 | 统一任务中心 | ✅ | `core/task_manager.py` + `ui/task_center.py`：排队/进度/取消/失败详情/重试 | — |
 | P0-03 | 索引健康检查与修复 | ✅ | `core/index_health.py`：inspect + 保守 repair（只修复确认缺失记录） | — |
-| P0-04 | 内容全文索引 | ✅ | `core/content_indexer.py` + `file_content_fts` 表 + `FileContentDAO`，复用 `file_reader.py` | — |
+| P0-04 | 内容全文索引 | ✅ | `core/content_indexer.py`（修改指纹增量：size:mtime 未变则跳过）+ `file_content_fts` 表 + `FileContentDAO`，复用 `file_reader.py`；单文件失败不阻断批次 | — |
 | P0-05 | 高级搜索语法 | 🔶 | `core/rule_engine.py` NLSearchParser + `ui/search_tab.py` 高级搜索条件区 | 语法提示/错误定位/结构化回显需确认补全 |
 | P0-06 | 智能集合 | 🔶 | `ui/search_tab.py`：集合保存/删除/应用（存 QSettings） | 未用 `saved_queries` 表，无 DAO；"不移动真实文件"满足 |
 | P0-07 | 批量重命名预览 | ✅ | `core/file_manager.py` `preview_batch_rename()` + `ui/classify_tab.py` 预览确认 | — |
@@ -57,8 +57,8 @@
 ### 批次 1：底座稳定收尾（对应 Phase 1）
 | 任务 | 说明 | 状态 |
 |---|---|---|
-| 1-1 增量索引自动落库 | file_watcher 事件 → 自动增量更新 files 表；失败重试；事件风暴合并 | ⬜ |
-| 1-2 内容索引增量/失败隔离确认 | content_indexer 按修改指纹增量、单文件失败不阻断（补测试） | ⬜ |
+| 1-1 增量索引自动落库 | file_watcher 事件 → 自动增量更新 files 表；失败重试；事件风暴合并 | ✅ |
+| 1-2 内容索引增量/失败隔离确认 | content_indexer 按修改指纹增量、单文件失败不阻断（补测试） | ✅ |
 
 ### 批次 2：搜索与组织补全（对应 Phase 2）
 | 任务 | 说明 | 状态 |
@@ -110,3 +110,4 @@ P2-05 知识图谱、P2-06 跨模态搜索、P2-07 生命周期策略、P2-08 �
 | 日期 | 内容 | 验证 |
 |---|---|---|
 | 2026-07-22 | 对照 ROADMAP 完成全量盘点；建立本进度文档；测试基线 99 passed | ✅ |
+| 2026-08-17 | **批次 1 完成**：① 新增 `core/index_updater.py`——事件风暴合并（同路径保留最终状态）、created/modified/deleted/moved 自动落库、单事件失败重试 2 次且不阻断批次；`file_watcher.py` 事件支持 dest_path，WatcherManager 新增 auto_apply 自动落库与完成回调；`scan_tab.py` 接入自动落库。② `content_indexer.py` 增加修改指纹增量（size:mtime 未变跳过，变化或首次才重提），files 表新增 `content_fingerprint` 列并带幂等迁移，单文件失败不阻断批次 | 115 passed（原 99 + 新增 16 个测试） |
