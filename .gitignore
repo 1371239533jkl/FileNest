@@ -46,4 +46,5 @@ build-lite/
 dist/
 dist-lite/
 *.spec
-pyinstaller*.log
+pyinstaller*.log# 功能进度追踪（工作区辅助文档，不进版本库）
+docs/PROGRESS.md
