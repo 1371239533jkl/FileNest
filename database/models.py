@@ -669,6 +669,12 @@ class ClassificationRuleDAO:
             "UPDATE classification_rules SET is_enabled = ? WHERE id = ?",
             (int(enabled), rule_id))
 
+    def update_priority(self, rule_id: int, priority: int) -> int:
+        """仅更新规则优先级（供排序/上移下移使用）"""
+        return self.db.execute_update(
+            "UPDATE classification_rules SET priority = ? WHERE id = ?",
+            (priority, rule_id))
+
     def delete(self, rule_id: int) -> int:
         return self.db.execute_update("DELETE FROM classification_rules WHERE id = ?", (rule_id,))
 

@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QFileDialog, QProgressBar, QTableWidget, QTableWidgetItem,
     QCheckBox, QMessageBox, QHeaderView, QApplication, QFrame, QTextEdit
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSettings
 
 import os
 from core import FileScanWorker
@@ -67,6 +67,9 @@ class ScanTab(QWidget):
         self.cleanup_worker = None
         self.content_index_worker = None
         self._pending_content_index = False
+        # ponytail: 清理建议缓存——指纹(数据状态)未变时复用上次结果，避免重复消耗 token
+        self._settings = QSettings("FileNest", "FileNest")
+        self._cleanup_fingerprint = ""
         self.file_dao = FileDAO(db)
         self.metadata_dao = MetadataDAO(db)
         self.scan_dao = ScanDirectoryDAO(db)
@@ -290,9 +293,24 @@ class ScanTab(QWidget):
         self.scan_worker = None
 
     def _show_cleanup_report(self):
-        """分析数据库中的文件并展示清理建议报告"""
+        """分析数据库中的文件并展示清理建议报告。
+
+        ponytail: 指纹未变（无新增扫描/数据变动）时复用缓存报告，不重新
+        分析、不调用 AI，避免每次点击都消耗 token。
+        """
         if self.cleanup_worker and self.cleanup_worker.isRunning():
             return
+        row = db.execute_one(
+            "SELECT COUNT(*) AS cnt, COALESCE(SUM(file_size), 0) AS total_size, "
+            "COALESCE(MAX(scan_time), '') AS last_scan FROM files WHERE status='active'") or {}
+        fingerprint = "|".join(str(v) for v in
+                               (row.get('cnt', 0), row.get('total_size', 0), row.get('last_scan', '')))
+        cached_fp = self._settings.value("ai/cleanup_fingerprint", "")
+        cached_text = self._settings.value("ai/cleanup_text", "")
+        if cached_fp == fingerprint and cached_text:
+            QMessageBox.information(self, "磁盘清理建议报告", cached_text)
+            return
+        self._cleanup_fingerprint = fingerprint
         self.cleanup_btn.setEnabled(False)
         self.cleanup_btn.setText("分析中...")
         self.cleanup_worker = CleanupAnalysisWorker(self)
@@ -339,7 +357,11 @@ class ScanTab(QWidget):
     def _on_cleanup_ready(self, report):
         self._finish_cleanup_analysis()
         if not report or not report.get('categories'):
-            QMessageBox.information(self, "清理建议", "未发现需要清理的文件，磁盘状况良好！")
+            text = "未发现需要清理的文件，磁盘状况良好！"
+            QMessageBox.information(self, "清理建议", text)
+            if self._cleanup_fingerprint:
+                self._settings.setValue("ai/cleanup_fingerprint", self._cleanup_fingerprint)
+                self._settings.setValue("ai/cleanup_text", text)
             return
         lines = [
             f"共 {report['total_active_files']} 个活跃文件，占用 {format_size(report['total_size'])}",
@@ -352,7 +374,16 @@ class ScanTab(QWidget):
                 f"   {category.get('description', '')}",
                 f"   建议: {category.get('action', '')}\n",
             ))
-        QMessageBox.information(self, "磁盘清理建议报告", "\n".join(lines))
+        # ponytail: 原本 ai_advice 生成后从未展示，纯浪费 token；现附在报告末尾
+        ai_advice = report.get('ai_advice')
+        if ai_advice:
+            lines.extend(("🤖 AI 建议:", f"   {ai_advice}", ""))
+        text = "\n".join(lines)
+        QMessageBox.information(self, "磁盘清理建议报告", text)
+        # 缓存本次报告及其指纹，数据未变时下次直接复用
+        if self._cleanup_fingerprint:
+            self._settings.setValue("ai/cleanup_fingerprint", self._cleanup_fingerprint)
+            self._settings.setValue("ai/cleanup_text", text)
 
     def _on_cleanup_error(self, error):
         self._finish_cleanup_analysis()
