@@ -26,42 +26,10 @@ from ui.empty_state import create_empty_state
 
 
 class ThemedComboBox(QComboBox):
-    """Force the Windows combo popup container to use the active QSS surface.
+    """兼容类：弹层样式已由 main_window 在启动时通过 monkey-patch 全局生效。
 
-    Qt creates a private popup QFrame outside the combo's normal widget tree.
-    On Windows that frame can retain the native white palette even when the
-    QAbstractItemView itself is styled.
+    保留子类仅为向后兼容（外部模块可能仍引用此类型）。
     """
-
-    def showPopup(self):
-        super().showPopup()
-        self._style_popup_container()
-        # Some platform styles finish creating the popup after showPopup().
-        QTimer.singleShot(0, self._style_popup_container)
-
-    def _style_popup_container(self):
-        popup = self.view().window()
-        if popup is self.window():
-            return
-
-        palette = self.palette()
-        background = palette.color(QPalette.ColorRole.Base)
-        foreground = palette.color(QPalette.ColorRole.Text)
-        # The Windows native palette can report a near-white Mid color even
-        # for a dark QSS surface, which reintroduces a visible popup rim.
-        border = QColor('#2a2a3e' if background.lightness() < 128 else '#cbd5e1')
-        popup_palette = popup.palette()
-        popup_palette.setColor(QPalette.ColorRole.Window, background)
-        popup_palette.setColor(QPalette.ColorRole.Base, background)
-        popup_palette.setColor(QPalette.ColorRole.Text, foreground)
-        popup.setPalette(popup_palette)
-        popup.setAutoFillBackground(True)
-        popup.setContentsMargins(0, 0, 0, 0)
-        if popup.layout():
-            popup.layout().setContentsMargins(0, 0, 0, 0)
-        popup.setStyleSheet(
-            f"background-color: {background.name()}; color: {foreground.name()}; "
-            f"border: 1px solid {border.name()}; margin: 0; padding: 0;")
 
 
 class ContentIndexWorker(QThread):
@@ -280,16 +248,20 @@ class SearchTab(QWidget):
         layout.addWidget(self.search_group)
         self._set_advanced_filters_expanded(False)
 
+        # ponytail: 将"当前条件"与"共 N 个文件"并入一行，节省垂直空间给结果列表
+        stats_layout = QHBoxLayout()
+        stats_layout.setSpacing(12)
+
         self.filter_summary = QLabel("当前条件：未设置")
         self.filter_summary.setObjectName("subtitleLabel")
-        self.filter_summary.setWordWrap(True)
-        layout.addWidget(self.filter_summary)
+        self.filter_summary.hide()  # ponytail: 初始/未搜索时隐藏，搜索后由 _update_filter_summary 显示
+        stats_layout.addWidget(self.filter_summary, 1)
 
-        # 结果统计
-        stats_layout = QHBoxLayout()
         self.result_label = QLabel("请输入搜索条件")
         self.result_label.setObjectName("subtitleLabel")
+        self.result_label.hide()  # ponytail: 初始/未搜索时隐藏，搜索后由 _populate_results 显示
         stats_layout.addWidget(self.result_label)
+
         stats_layout.addStretch()
 
         stats_layout.addWidget(QLabel("排序:"))
@@ -522,6 +494,8 @@ class SearchTab(QWidget):
         self._sort_current_page()
 
         self.result_label.setText(f"共 {total} 个文件")
+        self.result_label.setStyleSheet("")  # ponytail: 清空残留样式（AI 流程可能设了蓝/绿/红），回到 subtitleLabel 主题默认
+        self.result_label.show()  # ponytail: 搜索有结果时显示
         self.total_size_label.setText(f"当前页: {format_size(total_size)}")
 
         # 更新分页状态
@@ -548,6 +522,7 @@ class SearchTab(QWidget):
         if dup is not None:
             labels.append("仅重复文件" if dup else "排除重复文件")
         self.filter_summary.setText("当前条件：" + (" · ".join(labels) if labels else "全部文件"))
+        self.filter_summary.show()  # ponytail: 搜索流程中调用，强制显示
 
     def _sort_current_page(self):
         column = self.sort_combo.currentData() if hasattr(self, 'sort_combo') else -1
@@ -662,6 +637,7 @@ class SearchTab(QWidget):
 
         self.result_label.setText("🔍 正在解析...")
         self.result_label.setStyleSheet("color: #89b4fa; font-weight: bold; font-size: 13px;")
+        self.result_label.show()  # ponytail: 解析中提示也需可见
 
         params = self.nl_parser.parse_with_explanation(query)
         if params and any(key in params for key in
@@ -673,6 +649,7 @@ class SearchTab(QWidget):
             self.result_label.setText(
                 "无法解析，请尝试更明确的描述或点击「❓ 语法」查看示例。")
             self.result_label.setStyleSheet("color: #f38ba8; font-size: 13px;")
+            self.result_label.show()  # ponytail: 失败提示也需可见
 
     def _show_nl_syntax_help(self):
         """展示自然语言搜索语法提示"""
@@ -724,11 +701,10 @@ class SearchTab(QWidget):
         self.total_count = 0
         self._update_filter_summary()
         self._set_advanced_filters_expanded(False)
+        # ponytail: 解读信息已由 filter_summary（"当前条件：..."）完整回显，
+        # 不再重复写入 result_label，避免"类型"显示两次。result_label 由
+        # _populate_results 覆盖为"共 N 个文件"。
         self._load_page()
-        explanation = params.get('explanation', '')
-        source_text = f" ({source})" if source else ""
-        self.result_label.setText(f"🤖 {explanation or 'AI 解读完成'}{source_text}")
-        self.result_label.setStyleSheet("color: #a6e3a1; font-weight: bold; font-size: 13px;")
 
 
 
@@ -751,12 +727,14 @@ class SearchTab(QWidget):
         self._empty_state.show_empty()
         self.result_label.setText("请输入搜索条件")
         self.result_label.setStyleSheet("")
+        self.result_label.hide()  # ponytail: 重置时隐藏
         self.total_size_label.setText("")
         self.page_label.setText("第 0 页 / 共 0 页")
         self.prev_page_btn.setEnabled(False)
         self.next_page_btn.setEnabled(False)
         self.export_btn.setVisible(False)
         self.filter_summary.setText("当前条件：未设置")
+        self.filter_summary.hide()  # ponytail: 重置时隐藏
         self.result_detail.setText("选择一个文件查看路径、大小和修改时间")
 
     def display_ai_results(self, result: dict):
@@ -1062,6 +1040,7 @@ class SearchTab(QWidget):
 
         self.result_label.setText("🤖 AI 正在分析文件...")
         self.result_label.setStyleSheet("color: #89b4fa; font-weight: bold; font-size: 13px;")
+        self.result_label.show()  # ponytail: 与解析中提示一致
 
         class _DescWorker(QThread):
             done = pyqtSignal(str)
@@ -1108,12 +1087,14 @@ class SearchTab(QWidget):
         self._desc_worker = None
         self.result_label.setText(f"🤖 AI 描述: {text}")
         self.result_label.setStyleSheet("color: #a6e3a1; font-weight: bold; font-size: 12px;")
+        self.result_label.show()  # ponytail: 结果反馈需可见
         QMessageBox.information(self, "🤖 AI 文件描述", text)
 
     def _on_ai_desc_error(self, err: str):
         self._desc_worker = None
         self.result_label.setText(f"AI 描述失败: {err}")
         self.result_label.setStyleSheet("color: #f38ba8; font-size: 12px;")
+        self.result_label.show()  # ponytail: 错误反馈需可见
         logger.warning(f"AI 描述文件失败: {err}")
 
     def _ai_suggest_rename(self, file_id):
@@ -1125,6 +1106,7 @@ class SearchTab(QWidget):
 
         self.result_label.setText("🤖 AI 正在生成重命名建议...")
         self.result_label.setStyleSheet("color: #89b4fa; font-weight: bold; font-size: 13px;")
+        self.result_label.show()  # ponytail: 与解析中提示一致
 
         class _RenameWorker(QThread):
             done = pyqtSignal(list)
@@ -1156,16 +1138,16 @@ class SearchTab(QWidget):
         self._rename_worker.start()
 
     def _on_ai_rename_done(self, suggestions: list):
+        # ponytail: 先取 file_id 再置 None；原逻辑在 worker 置 None 后取恒为 None
+        file_id = (getattr(self._rename_worker, 'record', None) or {}).get('file_id') if self._rename_worker else None
         self._rename_worker = None
         self.result_label.setText("")
         self.result_label.setStyleSheet("")
+        self.result_label.hide()  # ponytail: 清空后隐藏，与隐藏策略一致
 
         if not suggestions:
             QMessageBox.information(self, "🤖 AI 重命名", "无法生成重命名建议。")
             return
-
-        # 获取 file_id（从 _rename_worker 的 record 中）
-        file_id = getattr(self._rename_worker, 'record', {}).get('file_id') if hasattr(self, '_rename_worker') else None
 
         # 让用户从建议中选择
         items = []
@@ -1188,6 +1170,7 @@ class SearchTab(QWidget):
         self._rename_worker = None
         self.result_label.setText(f"AI 重命名失败: {err}")
         self.result_label.setStyleSheet("color: #f38ba8; font-size: 12px;")
+        self.result_label.show()  # ponytail: 错误反馈需可见
         logger.warning(f"AI 重命名建议失败: {err}")
 
     def _do_rename_file(self, file_id, new_name):

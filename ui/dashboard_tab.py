@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QFrame
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSettings
 
 from database.db_manager import db
 from database.models import FileDAO
@@ -42,6 +42,9 @@ class DashboardTab(QWidget):
         super().__init__(parent)
         self.file_dao = FileDAO(db)
         self._insight_worker = None
+        # ponytail: 洞察缓存——指纹(数据状态)未变时复用上次 AI 洞察，避免反复消耗 token
+        self._settings = QSettings("FileNest", "FileNest")
+        self._insight_fingerprint = ""
         self._init_ui()
 
     def _init_ui(self):
@@ -398,12 +401,30 @@ class DashboardTab(QWidget):
 
     def _trigger_ai_insight(self, total_files, total_size, dup_groups, wasted,
                              type_stats, monthly, top_dirs):
-        """后台触发 AI 仪表盘洞察"""
+        """后台触发 AI 仪表盘洞察。
+
+        ponytail: 先计算数据指纹；指纹未变（无新增扫描/数据变动）时复用缓存
+        洞察，不调用 AI，避免每次打开仪表盘都消耗 token。
+        """
         from core.ai_layer import AILayer
         ai = AILayer()
         if not ai.enabled:
             self._insight_widget.setVisible(False)
             return
+
+        # 数据指纹 = 关键统计 + 最新扫描时间，任何文件变动都会使指纹变化
+        row = db.execute_one(
+            "SELECT COALESCE(MAX(scan_time), '') AS last_scan FROM files WHERE status='active'")
+        last_scan = (row or {}).get('last_scan') or ''
+        fingerprint = "|".join(str(v) for v in
+                               (total_files, total_size, dup_groups, wasted, last_scan))
+        cached_fp = self._settings.value("ai/insight_fingerprint", "")
+        cached_text = self._settings.value("ai/insight_text", "")
+        if cached_fp == fingerprint and cached_text:
+            self._insight_widget.setVisible(True)
+            self.insight_label.setText(cached_text)
+            return
+        self._insight_fingerprint = fingerprint
 
         type_dist = ", ".join(
             f"{FILE_TYPE_NAMES.get(r['file_type'], r['file_type'])} {r['count']}个"
@@ -440,6 +461,10 @@ class DashboardTab(QWidget):
         if text:
             self.insight_label.setText(text)
             self._insight_widget.setVisible(True)
+            # 缓存本次洞察及其指纹，数据未变时下次直接复用
+            if self._insight_fingerprint:
+                self._settings.setValue("ai/insight_fingerprint", self._insight_fingerprint)
+                self._settings.setValue("ai/insight_text", text)
         else:
             self._insight_widget.setVisible(False)
 

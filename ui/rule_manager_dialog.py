@@ -157,20 +157,25 @@ class RuleManagerDialog(QDialog):
         self.table.selectRow(row)
 
     def _move_rule(self, direction: int):
-        """调整优先级：与相邻规则交换 priority。"""
+        """调整优先级：与相邻规则交换位置。
+
+        ponytail: 原实现交换 priority 值，但多条规则 priority 相同（新建
+        默认都是 10）时交换无效，表现为"点了没区别"。改为按表格新顺序
+        整列重写唯一 priority（行号越小越高），任何情况下都生效。
+        """
         rule, row = self._selected_rule()
         if not rule:
             return
         target = row + direction
         if target < 0 or target >= len(self._rules):
             return
-        other = self._rules[target]
-        self.rule_dao.update(rule['id'], rule.get('rule_name', ''),
-                             rule.get('rule_type', ''), rule.get('rule_pattern', ''),
-                             rule.get('target_category', ''), int(other.get('priority', 0)))
-        self.rule_dao.update(other['id'], other.get('rule_name', ''),
-                             other.get('rule_type', ''), other.get('rule_pattern', ''),
-                             other.get('target_category', ''), int(rule.get('priority', 0)))
+        ordered = list(self._rules)
+        ordered[row], ordered[target] = ordered[target], ordered[row]
+        n = len(ordered)
+        for index, r in enumerate(ordered):
+            new_priority = n - index  # 第 0 行最高，保证唯一且与表格顺序一致
+            if int(r.get('priority', 0)) != new_priority:
+                self.rule_dao.update_priority(r['id'], new_priority)
         self._load_rules()
         self.table.selectRow(target)
 

@@ -235,6 +235,17 @@ QComboBox QAbstractItemView::item {
     min-height: 30px;
     padding: 4px 10px;
     border: none;
+    outline: 0;
+    margin: 0;
+    /* ponytail: 与弹层同色，覆盖 Windows 风格默认的 1px item separator（呈现为"白边"） */
+    background-color: #1a1a2e;
+}
+QComboBox QAbstractItemView::item:hover:!selected {
+    background-color: #2a2a3e;
+}
+QComboBox QAbstractItemView::item:selected {
+    background-color: #3b82f6;
+    color: #ffffff;
 }
 QComboBoxPrivateContainer {
     background-color: #1a1a2e;
@@ -383,6 +394,60 @@ QDateEdit {
     border: 1px solid #2a2a3e;
     border-radius: 8px;
     padding: 8px 12px;
+}
+/* ponytail: 日历弹层深色化，标题栏/按钮/格子全部主题化 */
+QCalendarWidget {
+    background-color: #1e1e2e;
+    color: #e8e8ef;
+}
+QCalendarWidget QToolButton,
+QCalendarWidget QToolButton:focus,
+QCalendarWidget QToolButton:pressed,
+QCalendarWidget QToolButton:checked {
+    background-color: #1e1e2e;
+    color: #e8e8ef;
+    border: none;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+}
+QCalendarWidget QToolButton:hover {
+    background-color: #2a2a3e;
+}
+QCalendarWidget QMenu {
+    background-color: #1e1e2e;
+    color: #e8e8ef;
+}
+QCalendarWidget QSpinBox {
+    background-color: #1a1a2e;
+    color: #e8e8ef;
+    border: 1px solid #2a2a3e;
+    border-radius: 4px;
+    padding: 2px 6px;
+}
+QCalendarWidget QTableView {
+    background-color: #1e1e2e;
+    alternate-background-color: #1a1a2e;
+    selection-background-color: #3b82f6;
+    selection-color: #ffffff;
+    gridline-color: #2a2a3e;
+}
+QCalendarWidget QTableView::item {
+    background-color: transparent;
+    color: #e8e8ef;
+    border: none;
+    padding: 2px;
+    outline: 0;
+}
+QCalendarWidget QTableView::item:hover:!selected {
+    background-color: #2a2a3e;
+}
+QCalendarWidget QHeaderView::section {
+    background-color: #1e1e2e;
+    color: #a6adc8;
+    border: none;
+    padding: 4px;
+    font-weight: bold;
 }
 
 /* 分组框 */
@@ -681,6 +746,17 @@ QComboBox QAbstractItemView::item {
     min-height: 30px;
     padding: 4px 10px;
     border: none;
+    outline: 0;
+    margin: 0;
+    /* ponytail: 与弹层同色，覆盖 Windows 风格默认的 1px item separator（呈现为"白边"） */
+    background-color: #ffffff;
+}
+QComboBox QAbstractItemView::item:hover:!selected {
+    background-color: #f1f5f9;
+}
+QComboBox QAbstractItemView::item:selected {
+    background-color: #3b82f6;
+    color: #ffffff;
 }
 QComboBoxPrivateContainer {
     background-color: #ffffff;
@@ -830,6 +906,61 @@ QDateEdit {
     border-radius: 8px;
     padding: 8px 12px;
 }
+/* ponytail: 日历弹层浅色化，标题栏 QToolButton 显式浅色背景，避免继承系统深色 */
+QCalendarWidget {
+    background-color: #ffffff;
+    color: #333333;
+}
+QCalendarWidget QToolButton,
+QCalendarWidget QToolButton:focus,
+QCalendarWidget QToolButton:pressed,
+QCalendarWidget QToolButton:checked {
+    background-color: #ffffff;
+    color: #333333;
+    border: none;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+}
+QCalendarWidget QToolButton:hover {
+    background-color: #f1f5f9;
+    color: #333333;
+}
+QCalendarWidget QMenu {
+    background-color: #ffffff;
+    color: #333333;
+}
+QCalendarWidget QSpinBox {
+    background-color: #ffffff;
+    color: #333333;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    padding: 2px 6px;
+}
+QCalendarWidget QTableView {
+    background-color: #ffffff;
+    alternate-background-color: #f8fafc;
+    selection-background-color: #3b82f6;
+    selection-color: #ffffff;
+    gridline-color: #e2e8f0;
+}
+QCalendarWidget QTableView::item {
+    background-color: transparent;
+    color: #333333;
+    border: none;
+    padding: 2px;
+    outline: 0;
+}
+QCalendarWidget QTableView::item:hover:!selected {
+    background-color: #f1f5f9;
+}
+QCalendarWidget QHeaderView::section {
+    background-color: #ffffff;
+    color: #64748b;
+    border: none;
+    padding: 4px;
+    font-weight: bold;
+}
 
 /* 分组框 */
 QGroupBox {
@@ -925,4 +1056,124 @@ QLabel {
 
 # 别名，兼容旧引用
 MAIN_STYLE = DARK_STYLE
+
+# ══════════════════════════════════════════════════════════════════════
+# 日历弹层独立样式（QCalendarWidget）
+# 说明：QDateEdit 的日历弹层是独立顶层窗口，不继承 MainWindow 的 QSS，
+# 因此必须把这些样式直接应用到日历控件本身（MonthOnlyCalendar.setStyleSheet）。
+# 与上方 DARK_STYLE / LIGHT_STYLE 内的日历块保持一致。
+# ══════════════════════════════════════════════════════════════════════
+
+DARK_CALENDAR_QSS = """
+QCalendarWidget {
+    background-color: #1e1e2e;
+    color: #e8e8ef;
+}
+QCalendarWidget QToolButton,
+QCalendarWidget QToolButton:focus,
+QCalendarWidget QToolButton:pressed,
+QCalendarWidget QToolButton:checked {
+    background-color: #1e1e2e;
+    color: #e8e8ef;
+    border: none;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+}
+QCalendarWidget QToolButton:hover {
+    background-color: #2a2a3e;
+}
+QCalendarWidget QMenu {
+    background-color: #1e1e2e;
+    color: #e8e8ef;
+}
+QCalendarWidget QSpinBox {
+    background-color: #1a1a2e;
+    color: #e8e8ef;
+    border: 1px solid #2a2a3e;
+    border-radius: 4px;
+    padding: 2px 6px;
+}
+QCalendarWidget QTableView {
+    background-color: #1e1e2e;
+    alternate-background-color: #1a1a2e;
+    selection-background-color: #3b82f6;
+    selection-color: #ffffff;
+    gridline-color: #2a2a3e;
+}
+QCalendarWidget QTableView::item {
+    background-color: transparent;
+    color: #e8e8ef;
+    border: none;
+    padding: 2px;
+    outline: 0;
+}
+QCalendarWidget QTableView::item:hover:!selected {
+    background-color: #2a2a3e;
+}
+QCalendarWidget QHeaderView::section {
+    background-color: #1e1e2e;
+    color: #a6adc8;
+    border: none;
+    padding: 4px;
+    font-weight: bold;
+}
+"""
+
+LIGHT_CALENDAR_QSS = """
+QCalendarWidget {
+    background-color: #ffffff;
+    color: #333333;
+}
+QCalendarWidget QToolButton,
+QCalendarWidget QToolButton:focus,
+QCalendarWidget QToolButton:pressed,
+QCalendarWidget QToolButton:checked {
+    background-color: #ffffff;
+    color: #333333;
+    border: none;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+}
+QCalendarWidget QToolButton:hover {
+    background-color: #f1f5f9;
+    color: #333333;
+}
+QCalendarWidget QMenu {
+    background-color: #ffffff;
+    color: #333333;
+}
+QCalendarWidget QSpinBox {
+    background-color: #ffffff;
+    color: #333333;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    padding: 2px 6px;
+}
+QCalendarWidget QTableView {
+    background-color: #ffffff;
+    alternate-background-color: #f8fafc;
+    selection-background-color: #3b82f6;
+    selection-color: #ffffff;
+    gridline-color: #e2e8f0;
+}
+QCalendarWidget QTableView::item {
+    background-color: transparent;
+    color: #333333;
+    border: none;
+    padding: 2px;
+    outline: 0;
+}
+QCalendarWidget QTableView::item:hover:!selected {
+    background-color: #f1f5f9;
+}
+QCalendarWidget QHeaderView::section {
+    background-color: #ffffff;
+    color: #64748b;
+    border: none;
+    padding: 4px;
+    font-weight: bold;
+}
+"""
 
