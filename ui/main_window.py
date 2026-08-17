@@ -10,7 +10,7 @@ from PyQt6.QtCore import Qt, QTimer, QDate
 from PyQt6.QtGui import QShortcut, QKeySequence, QPalette, QPainter, QColor
 
 from config import APP_NAME, APP_VERSION, WINDOW_WIDTH, WINDOW_HEIGHT, MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT
-from ui.styles import DARK_STYLE, LIGHT_STYLE
+from ui.styles import DARK_STYLE, LIGHT_STYLE, DARK_CALENDAR_QSS, LIGHT_CALENDAR_QSS
 
 
 # ponytail: 全局修复下拉弹层白边/边框。Qt 在 Windows 风格下给每个 item 之间
@@ -51,50 +51,72 @@ def _patched_qcombobox_showpopup(self):
 QComboBox.showPopup = _patched_qcombobox_showpopup
 
 
-# ponytail: 只显示当月日期的日历。
-# Qt 走 QCalendarWidget.paintCell 渲染日期格子（同 QTableView 内部布局），
-# 但 setDateRange 仅禁用点击不隐藏内容。组合：① setDateRange 锁定当月范围
-# 使相邻月 cell 不可点；② 重写 paintCell 对相邻月日期画与背景同色（不留数字）。
-#
-# 日历弹层是独立顶层窗口，不继承主窗口 QSS：必须把日历样式直接
-# setStyleSheet 到控件自身，并让 paintCell 的覆盖色跟随当前主题，
-# 否则浅色模式下顶部栏会混入系统默认色、相邻月覆盖色取错（palette
-# 不受 QSS 影响）。
-from ui.styles import DARK_CALENDAR_QSS, LIGHT_CALENDAR_QSS
-
-_CALENDAR_BG = {'dark': '#1e1e2e', 'light': '#ffffff'}
+# ponytail: 修复 QDateEdit 日历弹层的黑白问题。日历弹层是独立顶层窗口，
+# 不继承主窗口 QSS，须把 DARK/LIGHT_CALENDAR_QSS 主动 setStyleSheet 到
+# calendarWidget。同时监听弹出（showPopup）与主题切换两处刷新。
+_CURRENT_THEME = "dark"
+_CALENDAR_BACKGROUNDS = {"dark": "#1e1e2e", "light": "#ffffff"}
 
 
 class MonthOnlyCalendar(QCalendarWidget):
+    """Hide adjacent-month dates while preserving the standard calendar navigation."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._theme = 'dark'
-        self._bg_color = QColor(_CALENDAR_BG['dark'])
+        self._background = QColor(_CALENDAR_BACKGROUNDS["dark"])
+        self.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
         self._refresh_range()
-        # 当前月变化时（点击左右箭头）重新锁定范围 + 重画
         self.currentPageChanged.connect(lambda *_: self._refresh_range())
 
     def apply_theme(self, theme_name: str):
-        """切换主题：更新覆盖色与日历自身样式表。"""
-        self._theme = theme_name
-        self._bg_color = QColor(_CALENDAR_BG.get(theme_name, _CALENDAR_BG['dark']))
-        qss = DARK_CALENDAR_QSS if theme_name == 'dark' else LIGHT_CALENDAR_QSS
-        self.setStyleSheet(qss)
+        self._background = QColor(_CALENDAR_BACKGROUNDS[theme_name])
+        self.setStyleSheet(
+            DARK_CALENDAR_QSS if theme_name == "dark" else LIGHT_CALENDAR_QSS
+        )
         self._refresh_range()
 
     def _refresh_range(self):
-        y, m = self.yearShown(), self.monthShown()
-        self.setMinimumDate(QDate(y, m, 1))
-        self.setMaximumDate(QDate(y, m, QDate(y, m, 1).daysInMonth()))
-        self._bg_color = QColor(_CALENDAR_BG.get(self._theme, _CALENDAR_BG['dark']))
+        year, month = self.yearShown(), self.monthShown()
+        first_day = QDate(year, month, 1)
+        self.setDateRange(first_day, QDate(year, month, first_day.daysInMonth()))
         self.updateCells()
 
     def paintCell(self, painter: QPainter, rect, date: QDate):
-        if date.month() != self.monthShown() or date.year() != self.yearShown():
-            # ponytail: 相邻月日期画与背景同色矩形覆盖，不显示数字
-            painter.fillRect(rect, self._bg_color)
+        if date.year() != self.yearShown() or date.month() != self.monthShown():
+            painter.fillRect(rect, self._background)
             return
         super().paintCell(painter, rect, date)
+
+
+def _apply_calendar_theme(edit: QDateEdit):
+    cal = edit.calendarWidget()
+    if cal is None:
+        return
+    if isinstance(cal, MonthOnlyCalendar):
+        cal.apply_theme(_CURRENT_THEME)
+    else:
+        cal.setStyleSheet(
+            DARK_CALENDAR_QSS if _CURRENT_THEME == "dark" else LIGHT_CALENDAR_QSS
+        )
+        cal.update()
+
+    # 日历的 QFrame 弹层是独立窗口，不能继承日历自身的背景；若保留系统
+    # 深色调色板，边角会透出黑色。仅处理真正的弹层，不触碰主窗口。
+    popup = cal.window()
+    if popup is not edit.window() and popup is not cal:
+        background = QColor(_CALENDAR_BACKGROUNDS[_CURRENT_THEME])
+        foreground = QColor("#e8e8ef" if _CURRENT_THEME == "dark" else "#333333")
+        palette = popup.palette()
+        palette.setColor(QPalette.ColorRole.Window, background)
+        palette.setColor(QPalette.ColorRole.Base, background)
+        palette.setColor(QPalette.ColorRole.Text, foreground)
+        popup.setPalette(palette)
+        popup.setAutoFillBackground(True)
+        popup.setContentsMargins(0, 0, 0, 0)
+        popup.setStyleSheet(
+            f"background-color: {background.name()}; color: {foreground.name()}; "
+            "border: 1px solid #cbd5e1; border-radius: 0px;"
+        )
 
 
 _original_qdateedit_set_calendar_popup = QDateEdit.setCalendarPopup
@@ -103,17 +125,14 @@ _original_qdateedit_set_calendar_popup = QDateEdit.setCalendarPopup
 def _patched_qdateedit_set_calendar_popup(self, enable: bool):
     _original_qdateedit_set_calendar_popup(self, enable)
     if enable:
-        cal = self.calendarWidget()
-        if cal is not None and not isinstance(cal, MonthOnlyCalendar):
-            new_cal = MonthOnlyCalendar(self)
-            # ponytail: 保证两位日期（10-31）不被截断
-            new_cal.setMinimumSize(300, 250)
-            # 继承宿主窗口当前主题
-            from ui.styles import DARK_STYLE  # noqa: F401 仅用于避免循环导入风险
-            host = self.window()
-            theme = getattr(host, '_current_theme', 'dark') if host is not None else 'dark'
-            new_cal.apply_theme(theme)
-            self.setCalendarWidget(new_cal)
+        calendar = self.calendarWidget()
+        if calendar is not None and not isinstance(calendar, MonthOnlyCalendar):
+            themed_calendar = MonthOnlyCalendar(self)
+            themed_calendar.setMinimumSize(300, 250)
+            self.setCalendarWidget(themed_calendar)
+        # QDateEdit 没有 showPopup；日历弹层由 setCalendarPopup 创建，
+        # 创建后立刻套用主题 QSS（弹层是独立顶层窗口，不继承主窗口 QSS）。
+        QTimer.singleShot(0, lambda: _apply_calendar_theme(self))
 
 
 QDateEdit.setCalendarPopup = _patched_qdateedit_set_calendar_popup
@@ -166,6 +185,8 @@ class MainWindow(QMainWindow):
 
     def _apply_theme(self, theme_name):
         self._current_theme = theme_name
+        global _CURRENT_THEME
+        _CURRENT_THEME = theme_name
         style = DARK_STYLE if theme_name == "dark" else LIGHT_STYLE
         self.setStyleSheet(style)
 
@@ -183,15 +204,9 @@ class MainWindow(QMainWindow):
                 if w:
                     self.theme_manager.apply_theme_to_widget(w, theme_name)
 
-        # 同步已创建的日历弹层主题（弹层不继承 QSS）
-        self._refresh_calendar_themes(theme_name)
-
-    def _refresh_calendar_themes(self, theme_name):
-        """遍历所有 QDateEdit，将已创建的 MonthOnlyCalendar 切到当前主题。"""
+        # 刷新所有 QDateEdit 的日历弹层主题（弹层不继承 QSS，需主动刷新）
         for edit in self.findChildren(QDateEdit):
-            cal = edit.calendarWidget()
-            if isinstance(cal, MonthOnlyCalendar):
-                cal.apply_theme(theme_name)
+            _apply_calendar_theme(edit)
 
     def _toggle_theme(self):
         new_theme = "light" if self._current_theme == "dark" else "dark"

@@ -1057,13 +1057,10 @@ QLabel {
 # 别名，兼容旧引用
 MAIN_STYLE = DARK_STYLE
 
-# ══════════════════════════════════════════════════════════════════════
-# 日历弹层独立样式（QCalendarWidget）
-# 说明：QDateEdit 的日历弹层是独立顶层窗口，不继承 MainWindow 的 QSS，
-# 因此必须把这些样式直接应用到日历控件本身（MonthOnlyCalendar.setStyleSheet）。
-# 与上方 DARK_STYLE / LIGHT_STYLE 内的日历块保持一致。
-# ══════════════════════════════════════════════════════════════════════
 
+# ponytail: 日历弹层独立 QSS（QDateEdit 弹层是独立顶层窗口，不继承主窗口 QSS），
+# 需主动 setStyleSheet 到 calendarWidget。QToolButton 展开 :focus/:pressed/:checked
+# 伪状态确保主题色不被 Qt 系统色覆盖。
 DARK_CALENDAR_QSS = """
 QCalendarWidget {
     background-color: #1e1e2e;
@@ -1080,13 +1077,8 @@ QCalendarWidget QToolButton:checked {
     padding: 4px 8px;
     font-size: 12px;
 }
-QCalendarWidget QToolButton:hover {
-    background-color: #2a2a3e;
-}
-QCalendarWidget QMenu {
-    background-color: #1e1e2e;
-    color: #e8e8ef;
-}
+QCalendarWidget QToolButton:hover { background-color: #2a2a3e; }
+QCalendarWidget QMenu { background-color: #1e1e2e; color: #e8e8ef; }
 QCalendarWidget QSpinBox {
     background-color: #1a1a2e;
     color: #e8e8ef;
@@ -1108,9 +1100,7 @@ QCalendarWidget QTableView::item {
     padding: 2px;
     outline: 0;
 }
-QCalendarWidget QTableView::item:hover:!selected {
-    background-color: #2a2a3e;
-}
+QCalendarWidget QTableView::item:hover:!selected { background-color: #2a2a3e; }
 QCalendarWidget QHeaderView::section {
     background-color: #1e1e2e;
     color: #a6adc8;
@@ -1125,31 +1115,42 @@ QCalendarWidget {
     background-color: #ffffff;
     color: #333333;
 }
-QCalendarWidget QToolButton,
-QCalendarWidget QToolButton:focus,
-QCalendarWidget QToolButton:pressed,
-QCalendarWidget QToolButton:checked {
+QWidget#qt_calendar_navigationbar {
+    background-color: #ffffff;
+}
+QToolButton#qt_calendar_prevmonth,
+QToolButton#qt_calendar_nextmonth {
     background-color: #ffffff;
     color: #333333;
     border: none;
-    border-radius: 4px;
-    padding: 4px 8px;
+    border-radius: 3px;
+    padding: 0;
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 28px;
+    max-height: 28px;
+}
+QToolButton#qt_calendar_monthbutton,
+QToolButton#qt_calendar_yearbutton {
+    background-color: transparent;
+    color: #333333;
+    border: none;
+    padding: 0 6px;
     font-size: 12px;
+    font-weight: 600;
 }
-QCalendarWidget QToolButton:hover {
-    background-color: #f1f5f9;
-    color: #333333;
-}
-QCalendarWidget QMenu {
-    background-color: #ffffff;
-    color: #333333;
-}
-QCalendarWidget QSpinBox {
+QToolButton#qt_calendar_prevmonth:hover,
+QToolButton#qt_calendar_nextmonth:hover,
+QToolButton#qt_calendar_monthbutton:hover,
+QToolButton#qt_calendar_yearbutton:hover { background-color: #f1f5f9; color: #333333; }
+QCalendarWidget QMenu { background-color: #ffffff; color: #333333; }
+QSpinBox#qt_calendar_yearedit {
     background-color: #ffffff;
     color: #333333;
     border: 1px solid #cbd5e1;
     border-radius: 4px;
-    padding: 2px 6px;
+    padding: 0 4px;
+    min-height: 24px;
 }
 QCalendarWidget QTableView {
     background-color: #ffffff;
@@ -1165,9 +1166,7 @@ QCalendarWidget QTableView::item {
     padding: 2px;
     outline: 0;
 }
-QCalendarWidget QTableView::item:hover:!selected {
-    background-color: #f1f5f9;
-}
+QCalendarWidget QTableView::item:hover:!selected { background-color: #f1f5f9; }
 QCalendarWidget QHeaderView::section {
     background-color: #ffffff;
     color: #64748b;
