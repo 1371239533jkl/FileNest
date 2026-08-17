@@ -383,6 +383,11 @@ class ClassifyTab(QWidget):
         reclassify_btn.clicked.connect(self._reclassify_all)
         top_layout.addWidget(reclassify_btn)
 
+        rules_btn = QPushButton("整理规则管理")
+        rules_btn.setToolTip("新增/编辑/启停/排序分类规则，可测试命中")
+        rules_btn.clicked.connect(self._open_rule_manager)
+        top_layout.addWidget(rules_btn)
+
         top_layout.addStretch()
 
         self.file_count_label = QLabel("")
@@ -1159,6 +1164,12 @@ class ClassifyTab(QWidget):
         else:
             QMessageBox.information(self, f"{operation_name}结果", msg)
         self.refresh_data()
+
+    def _open_rule_manager(self):
+        """打开整理规则管理对话框"""
+        from ui.rule_manager_dialog import RuleManagerDialog
+        from database.models import ClassificationRuleDAO
+        RuleManagerDialog(self, ClassificationRuleDAO(db)).exec()
 
     def _reclassify_all(self):
         reply = QMessageBox.question(self, "确认", "重新分类所有文件? 这将清除现有分类结果。")
