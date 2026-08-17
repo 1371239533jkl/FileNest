@@ -165,9 +165,19 @@ class NLSearchParser:
         return '(?:(?<![a-zA-Z0-9_])' + kw + '(?![a-zA-Z0-9_]))'
 
     def parse(self, query: str) -> Dict[str, Any]:
-        """解析自然语言搜索字符串，返回 FileDAO.search() 兼容的参数字典。"""
+        """解析自然语言搜索字符串，返回 FileDAO.search() 兼容的参数字典。
+
+        对任意输入（含特殊字符、空串、超长串）都保证不抛异常。
+        """
         if not query or not isinstance(query, str):
             return {}
+        try:
+            return self._parse_inner(query)
+        except Exception as exc:  # noqa: BLE001 - 解析失败降级为空结果
+            logger.warning(f"搜索解析异常，降级为空结果: {exc!r}")
+            return {}
+
+    def _parse_inner(self, query: str) -> Dict[str, Any]:
 
         original = query.strip()
         query_lower = original.lower()
@@ -428,6 +438,35 @@ class NLSearchParser:
             parts.append("仅重复文件")
 
         return "，".join(parts) if parts else "未匹配到明确条件"
+
+    # ── 语法提示（供 UI 展示可输入示例） ──
+    SYNTAX_HINTS: List[str] = [
+        "类型：图片 / 文档 / 视频 / 音频 / 代码 / 压缩包",
+        "扩展名：pdf / word / excel / python / json",
+        "大小：大于100MB / 小于5GB / 约500KB",
+        "时间：今天 / 昨天 / 本周 / 上月 / 最近30天 / 2024年3月",
+        "重复：重复文件 / duplicate",
+        "组合：最近一周大于100MB的图片PDF",
+    ]
+
+    @classmethod
+    def syntax_help(cls) -> str:
+        """返回多行语法提示文本。"""
+        return "\n".join(cls.SYNTAX_HINTS)
+
+    def parse_with_explanation(self, query: str) -> Dict[str, Any]:
+        """解析并附加结构化回显（explanation + raw 条件），供 UI 展示。
+
+        返回 dict 除 FileDAO 参数外含:
+          explanation: 人类可读条件说明
+          raw: 原始查询
+        """
+        params = self.parse(query)
+        if not params:
+            return {'explanation': '未能解析任何搜索条件', 'raw': query or ''}
+        params['explanation'] = self.explain(query)
+        params['raw'] = query or ''
+        return params
 
 
 # ══════════════════════════════════════════════════════════════════════════════

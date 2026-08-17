@@ -17,7 +17,7 @@ from config import FILE_TYPE_NAMES
 from core import FileManager
 from core.rule_engine import NLSearchParser
 from database.db_manager import db
-from database.models import FileDAO, FileContentDAO
+from database.models import FileDAO, FileContentDAO, SavedQueryDAO
 from core.content_indexer import ContentIndexer
 from utils.display_utils import format_size, truncate_path, get_file_icon, get_file_color
 from utils.logger import logger
@@ -94,6 +94,7 @@ class SearchTab(QWidget):
         self._content_mode = False
         self._content_worker = None
         self._settings = QSettings("FileNest", "FileNest")
+        self._collection_dao = SavedQueryDAO(db)
         self._init_ui()
 
     def _init_ui(self):
@@ -114,6 +115,13 @@ class SearchTab(QWidget):
             "}"
         )
         ai_row.addWidget(self.nl_input, 1)
+
+        self.nl_hint_btn = QPushButton("❓ 语法")
+        self.nl_hint_btn.setFixedHeight(38)
+        self.nl_hint_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.nl_hint_btn.setToolTip("查看可用的搜索语法示例")
+        self.nl_hint_btn.clicked.connect(self._show_nl_syntax_help)
+        ai_row.addWidget(self.nl_hint_btn)
 
         self.nl_search_btn = QPushButton("🔍 解读")
         self.nl_search_btn.setObjectName("aiSearchBtn")
@@ -596,11 +604,7 @@ class SearchTab(QWidget):
         self._reload_search_history()
 
     def _collections(self):
-        raw = self._settings.value("search/collections", "[]")
-        try:
-            return json.loads(raw) if isinstance(raw, str) else []
-        except (TypeError, json.JSONDecodeError):
-            return []
+        return self._collection_dao.get_all()
 
     def _reload_collections(self):
         if not hasattr(self, 'collection_combo'):
@@ -621,9 +625,7 @@ class SearchTab(QWidget):
             return
         params = {key: value for key, value in self._search_params.items()
                   if not key.startswith('_')}
-        collections = [item for item in self._collections() if item.get('name') != name.strip()]
-        collections.append({'name': name.strip(), 'params': params})
-        self._settings.setValue("search/collections", json.dumps(collections, ensure_ascii=False))
+        self._collection_dao.upsert(name.strip(), params)
         self._reload_collections()
         notify(self, f"已保存智能集合：{name.strip()}", 'success', 3000)
 
@@ -638,8 +640,7 @@ class SearchTab(QWidget):
         if not collection:
             QMessageBox.information(self, "删除智能集合", "请先选择一个集合")
             return
-        collections = [item for item in self._collections() if item.get('name') != collection.get('name')]
-        self._settings.setValue("search/collections", json.dumps(collections, ensure_ascii=False))
+        self._collection_dao.delete(collection.get('name'))
         self._reload_collections()
 
     def _prev_page(self):
@@ -662,13 +663,27 @@ class SearchTab(QWidget):
         self.result_label.setText("🔍 正在解析...")
         self.result_label.setStyleSheet("color: #89b4fa; font-weight: bold; font-size: 13px;")
 
-        params = self.nl_parser.parse(query)
-        if params:
+        params = self.nl_parser.parse_with_explanation(query)
+        if params and any(key in params for key in
+                          ('name', 'file_type', 'extension', 'min_size',
+                           'max_size', 'start_date', 'end_date', 'is_duplicate')):
             self._remember_search(query)
             self._apply_search_params(params, source="规则")
         else:
-            self.result_label.setText("无法解析，请尝试更明确的描述或使用高级搜索条件。")
+            self.result_label.setText(
+                "无法解析，请尝试更明确的描述或点击「❓ 语法」查看示例。")
             self.result_label.setStyleSheet("color: #f38ba8; font-size: 13px;")
+
+    def _show_nl_syntax_help(self):
+        """展示自然语言搜索语法提示"""
+        QMessageBox.information(
+            self, "搜索语法提示",
+            "支持用自然语言组合以下条件（中英文均可）：\n\n"
+            + self.nl_parser.syntax_help()
+            + "\n\n示例：\n"
+            + "· 最近一周大于100MB的图片\n"
+            + "· 上周修改的PDF文档\n"
+            + "· 重复文件")
 
     def _apply_search_params(self, params: dict, source: str = ""):
         """将 AI 解析的参数填入搜索条件并执行搜索"""

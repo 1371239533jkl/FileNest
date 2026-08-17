@@ -237,6 +237,14 @@ class DBManager:
                 create_time     TEXT            NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS saved_queries (
+                id              INTEGER         PRIMARY KEY AUTOINCREMENT,
+                name            TEXT            NOT NULL UNIQUE,
+                params          TEXT            NOT NULL,
+                create_time     TEXT            NOT NULL,
+                update_time     TEXT
+            );
+
             CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
                 file_name,
                 file_path,

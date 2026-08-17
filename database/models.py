@@ -580,6 +580,60 @@ class ScanDirectoryDAO:
         return row is not None
 
 
+class SavedQueryDAO:
+    """智能集合（已保存搜索条件）表操作"""
+
+    def __init__(self, db):
+        self.db = db
+
+    def upsert(self, name: str, params: dict) -> int:
+        """按名称保存集合参数（JSON）。同名则更新，返回记录 id。"""
+        import json
+        import uuid
+        params_json = json.dumps(params, ensure_ascii=False, default=str)
+        row = self.db.execute_one(
+            "SELECT id FROM saved_queries WHERE name = ?", (name,))
+        if row:
+            self.db.execute_update(
+                "UPDATE saved_queries SET params = ?, update_time = ? WHERE id = ?",
+                (params_json, datetime.now(), row['id']))
+            return row['id']
+        return self.db.execute_insert(
+            "INSERT INTO saved_queries (name, params, create_time, update_time) VALUES (?, ?, ?, ?)",
+            (name, params_json, datetime.now(), datetime.now()))
+
+    def get_all(self) -> list:
+        rows = self.db.execute_query(
+            "SELECT * FROM saved_queries ORDER BY update_time DESC")
+        import json
+        for row in rows:
+            try:
+                row['params'] = json.loads(row.get('params') or '{}')
+            except (TypeError, ValueError):
+                row['params'] = {}
+        return rows
+
+    def get_by_name(self, name: str) -> dict:
+        row = self.db.execute_one(
+            "SELECT * FROM saved_queries WHERE name = ?", (name,))
+        if not row:
+            return None
+        import json
+        try:
+            row['params'] = json.loads(row.get('params') or '{}')
+        except (TypeError, ValueError):
+            row['params'] = {}
+        return row
+
+    def delete(self, name: str) -> int:
+        return self.db.execute_update(
+            "DELETE FROM saved_queries WHERE name = ?", (name,))
+
+    def count(self) -> int:
+        row = self.db.execute_one("SELECT COUNT(*) AS total FROM saved_queries")
+        return row['total'] if row else 0
+
+
 class ClassificationRuleDAO:
     """分类规则表操作"""
 
