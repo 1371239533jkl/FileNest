@@ -354,6 +354,52 @@ class FileDAO:
         return self.db.execute_update(
             "UPDATE files SET status = 'deleted' WHERE file_path = ?", (file_path,))
 
+    # ── 多阶段检测结果 DAO（基于 duplicate_group_id 的权威重复组） ──
+
+    def count_duplicate_groups_by_flag(self) -> int:
+        """统计多阶段检测确认的重复组数（is_duplicate=1 且组号非空）。"""
+        row = self.db.execute_one(
+            """SELECT COUNT(DISTINCT duplicate_group_id) AS total FROM files
+               WHERE is_duplicate = 1 AND duplicate_group_id IS NOT NULL
+                 AND status = 'active'""")
+        return row['total'] if row else 0
+
+    def get_duplicate_groups_paginated_by_flag(self, page: int = 0,
+                                                page_size: int = 50) -> list:
+        """按 duplicate_group_id 分组的重复组列表（分页）。"""
+        offset = page * page_size
+        sql = """SELECT duplicate_group_id AS group_id,
+            MAX(file_hash) AS file_hash,
+            COUNT(*) AS file_count,
+            MIN(file_size) AS single_size,
+            (COUNT(*) - 1) * MIN(file_size) AS wasted_size
+            FROM files
+            WHERE is_duplicate = 1 AND duplicate_group_id IS NOT NULL
+              AND status = 'active'
+            GROUP BY duplicate_group_id
+            ORDER BY wasted_size DESC
+            LIMIT ? OFFSET ?"""
+        return self.db.execute_query(sql, (page_size, offset))
+
+    def get_duplicate_group_files_by_flag(self, group_id: int) -> list:
+        """返回指定重复组内的全部文件记录。"""
+        return self.db.execute_query(
+            """SELECT * FROM files
+               WHERE duplicate_group_id = ? AND status = 'active'
+               ORDER BY modify_time DESC""",
+            (group_id,))
+
+    def get_duplicate_total_wasted_by_flag(self) -> int:
+        row = self.db.execute_one(
+            """SELECT COALESCE(SUM(wasted), 0) AS total FROM (
+                SELECT (COUNT(*) - 1) * MIN(file_size) AS wasted
+                FROM files
+                WHERE is_duplicate = 1 AND duplicate_group_id IS NOT NULL
+                  AND status = 'active'
+                GROUP BY duplicate_group_id
+            ) t""")
+        return row['total'] if row else 0
+
 
 class FileContentDAO:
     """Local extracted-text index, kept separate from file metadata FTS."""
