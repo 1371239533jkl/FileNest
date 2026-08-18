@@ -9,7 +9,7 @@ load_dotenv()
 
 # 应用信息
 APP_NAME = "智能文件管家"
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.4.0"
 
 # 窗口配置
 WINDOW_WIDTH = 1200
