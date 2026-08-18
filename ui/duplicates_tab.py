@@ -74,7 +74,8 @@ class DuplicatesTab(QWidget):
         layout.addLayout(header)
 
         hint = QLabel(
-            "以下文件存在重复（相同 SHA256 哈希），可保留一份并删除其余副本来释放空间。"
+            "以下为多阶段检测确认的重复文件（大小→快速哈希→完整哈希三级校验）。\n"
+            "数据来自「多阶段重新检测」，未运行检测时列表为空。可保留一份并删除其余副本来释放空间。"
         )
         hint.setObjectName("subtitleLabel")
         hint.setWordWrap(True)
@@ -230,11 +231,11 @@ class DuplicatesTab(QWidget):
         item = self.group_table.item(row, 0)
         if not item:
             return
-        file_hash = item.data(Qt.ItemDataRole.UserRole)
-        files = self.file_dao.get_duplicate_group_files(file_hash)
+        group_id = item.data(Qt.ItemDataRole.UserRole)
+        files = self.file_dao.get_duplicate_group_files_by_flag(group_id)
         if not files:
             return
-        self._ai_smart_select(file_hash, files)
+        self._ai_smart_select(group_id, files)
 
     def _keep_newest_in_group(self):
         rows = self.group_table.selectionModel().selectedRows()
@@ -244,8 +245,8 @@ class DuplicatesTab(QWidget):
         item = self.group_table.item(rows[0].row(), 0)
         if not item:
             return
-        file_hash = item.data(Qt.ItemDataRole.UserRole)
-        files = self.file_dao.get_duplicate_group_files(file_hash)
+        group_id = item.data(Qt.ItemDataRole.UserRole)
+        files = self.file_dao.get_duplicate_group_files_by_flag(group_id)
         keep_id, remove_ids = self.dedup_mgr.suggest_keep(files, 'keep_newest')
         keep = next((file for file in files if file['id'] == keep_id), None)
         if not keep or not remove_ids:
@@ -276,8 +277,8 @@ class DuplicatesTab(QWidget):
         super().closeEvent(event)
 
     def _load_groups(self):
-        self._total_groups = self.file_dao.count_duplicate_groups()
-        total_wasted = self.file_dao.get_duplicate_total_wasted()
+        self._total_groups = self.file_dao.count_duplicate_groups_by_flag()
+        total_wasted = self.file_dao.get_duplicate_total_wasted_by_flag()
         self.stats_label.setText(
             f"共 {self._total_groups} 组重复 · 浪费空间: {format_size(total_wasted)}")
 
@@ -299,15 +300,16 @@ class DuplicatesTab(QWidget):
             self.next_btn.setEnabled(False)
             return
 
-        groups = self.file_dao.get_duplicate_groups_paginated(
+        groups = self.file_dao.get_duplicate_groups_paginated_by_flag(
             page=self.current_page, page_size=self.page_size)
 
         self.group_table.setRowCount(len(groups))
 
         for i, g in enumerate(groups):
-            # 哈希（截短）
-            hash_item = QTableWidgetItem(g['file_hash'][:16] + "...")
-            hash_item.setData(Qt.ItemDataRole.UserRole, g['file_hash'])
+            # 哈希（截短；组内代表哈希，可能为空则显示组号）
+            hash_text = (g.get('file_hash') or '')[:16] + "..." if g.get('file_hash') else f"组 {g.get('group_id')}"
+            hash_item = QTableWidgetItem(hash_text)
+            hash_item.setData(Qt.ItemDataRole.UserRole, g.get('group_id'))
             self.group_table.setItem(i, 0, hash_item)
 
             self.group_table.setItem(i, 1, QTableWidgetItem(
@@ -338,11 +340,11 @@ class DuplicatesTab(QWidget):
         item = self.group_table.item(row, 0)
         if not item:
             return
-        file_hash = item.data(Qt.ItemDataRole.UserRole)
-        self._load_group_details(file_hash)
+        group_id = item.data(Qt.ItemDataRole.UserRole)
+        self._load_group_details(group_id)
 
-    def _load_group_details(self, file_hash: str):
-        files = self.file_dao.get_duplicate_group_files(file_hash)
+    def _load_group_details(self, group_id: int):
+        files = self.file_dao.get_duplicate_group_files_by_flag(group_id)
         self.detail_table.setRowCount(len(files))
 
         for i, f in enumerate(files):

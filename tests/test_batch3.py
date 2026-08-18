@@ -91,6 +91,27 @@ class TestMultistageDedup:
         assert len(groups) == 1
         assert len(list(groups.values())[0]) == 2
 
+    def test_main_page_dao_reads_detection_results(self, temp_db, file_dao, tmp_path):
+        """主页面 DAO 应能读取多阶段检测标记的重复组。"""
+        _insert(file_dao, tmp_path, 'a.txt', 'dup content')
+        _insert(file_dao, tmp_path, 'b.txt', 'dup content')
+        with patch('core.multistage_dedup.db', temp_db):
+            MultistageDedupDetector(file_dao).run()
+        assert file_dao.count_duplicate_groups_by_flag() == 1
+        groups = file_dao.get_duplicate_groups_paginated_by_flag(page=0, page_size=50)
+        assert len(groups) == 1
+        assert groups[0]['file_count'] == 2
+        assert groups[0]['wasted_size'] > 0
+        files = file_dao.get_duplicate_group_files_by_flag(groups[0]['group_id'])
+        assert len(files) == 2
+        assert file_dao.get_duplicate_total_wasted_by_flag() > 0
+
+    def test_main_page_dao_empty_before_detection(self, temp_db, file_dao, tmp_path):
+        """未运行多阶段检测时，主页面重复组应为空（权威结果来自检测）。"""
+        _insert(file_dao, tmp_path, 'a.txt', 'dup content')
+        _insert(file_dao, tmp_path, 'b.txt', 'dup content')
+        assert file_dao.count_duplicate_groups_by_flag() == 0
+
 
 class TestCleanupCenter:
     def test_analyze_categories(self, temp_db, file_dao, tmp_path):
