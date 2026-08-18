@@ -105,9 +105,33 @@ class DBManager:
             if 'content_fingerprint' not in cols:
                 conn.execute("ALTER TABLE files ADD COLUMN content_fingerprint TEXT")
                 logger.info("迁移: files 表新增 content_fingerprint 列")
+            if 'hash_state' not in cols:
+                conn.execute("ALTER TABLE files ADD COLUMN hash_state TEXT")
+                logger.info("迁移: files 表新增 hash_state 列")
+            if 'fast_hash' not in cols:
+                conn.execute("ALTER TABLE files ADD COLUMN fast_hash TEXT")
+                logger.info("迁移: files 表新增 fast_hash 列")
             conn.commit()
         except Exception as e:
             logger.warning(f"files 表列迁移跳过: {e}")
+
+    def _migrate_cleanup_tables(self, conn):
+        """创建清理中心配套表（幂等）。"""
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS cleanup_exclusions (
+                id              INTEGER         PRIMARY KEY AUTOINCREMENT,
+                path_pattern    TEXT            NOT NULL UNIQUE,
+                reason          TEXT,
+                create_time     TEXT            NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS cleanup_false_positives (
+                id              INTEGER         PRIMARY KEY AUTOINCREMENT,
+                file_path       TEXT            NOT NULL UNIQUE,
+                reason          TEXT,
+                create_time     TEXT            NOT NULL
+            );
+        """)
+        conn.commit()
 
     def init_database(self):
         """创建数据库表结构（幂等：CREATE TABLE IF NOT EXISTS）"""
@@ -129,6 +153,8 @@ class DBManager:
                 is_duplicate    INTEGER         DEFAULT 0,
                 duplicate_group_id INTEGER,
                 content_fingerprint TEXT,
+                hash_state          TEXT,
+                fast_hash           TEXT,
                 status          TEXT            DEFAULT 'active'
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_file_path ON files(file_path);
@@ -264,6 +290,9 @@ class DBManager:
 
         # === 轻量迁移：为已存在的 files 表补充列（幂等）===
         self._migrate_files_columns(conn)
+
+        # === 清理中心配套表（幂等）===
+        self._migrate_cleanup_tables(conn)
 
         # === FTS5 触发器（幂等：DROP IF EXISTS 后重建）===
         conn.executescript("""

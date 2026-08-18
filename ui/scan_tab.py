@@ -144,8 +144,8 @@ class ScanTab(QWidget):
         self.cancel_btn.clicked.connect(self._cancel_scan)
         btn_layout.addWidget(self.cancel_btn)
 
-        self.cleanup_btn = QPushButton("清理建议")
-        self.cleanup_btn.setToolTip("分析重复文件、长期未修改文件、临时文件等，生成磁盘清理建议")
+        self.cleanup_btn = QPushButton("清理中心")
+        self.cleanup_btn.setToolTip("聚合重复、临时、空、长期未用与超大文件建议，一键安全移入回收区")
         self.cleanup_btn.clicked.connect(self._show_cleanup_report)
         btn_layout.addWidget(self.cleanup_btn)
 
@@ -293,31 +293,9 @@ class ScanTab(QWidget):
         self.scan_worker = None
 
     def _show_cleanup_report(self):
-        """分析数据库中的文件并展示清理建议报告。
-
-        ponytail: 指纹未变（无新增扫描/数据变动）时复用缓存报告，不重新
-        分析、不调用 AI，避免每次点击都消耗 token。
-        """
-        if self.cleanup_worker and self.cleanup_worker.isRunning():
-            return
-        row = db.execute_one(
-            "SELECT COUNT(*) AS cnt, COALESCE(SUM(file_size), 0) AS total_size, "
-            "COALESCE(MAX(scan_time), '') AS last_scan FROM files WHERE status='active'") or {}
-        fingerprint = "|".join(str(v) for v in
-                               (row.get('cnt', 0), row.get('total_size', 0), row.get('last_scan', '')))
-        cached_fp = self._settings.value("ai/cleanup_fingerprint", "")
-        cached_text = self._settings.value("ai/cleanup_text", "")
-        if cached_fp == fingerprint and cached_text:
-            QMessageBox.information(self, "磁盘清理建议报告", cached_text)
-            return
-        self._cleanup_fingerprint = fingerprint
-        self.cleanup_btn.setEnabled(False)
-        self.cleanup_btn.setText("分析中...")
-        self.cleanup_worker = CleanupAnalysisWorker(self)
-        self.cleanup_worker.done.connect(self._on_cleanup_ready)
-        self.cleanup_worker.error.connect(self._on_cleanup_error)
-        TaskManager.instance().register('清理建议分析', self.cleanup_worker)
-        self.cleanup_worker.start()
+        """打开安全清理中心（聚合建议 + 一键移入回收区 + 排除/误报）。"""
+        from ui.cleanup_center_dialog import CleanupCenterDialog
+        CleanupCenterDialog(self).exec()
 
     def _show_task_center(self):
         TaskCenterDialog(self).exec()
@@ -380,8 +358,9 @@ class ScanTab(QWidget):
             lines.extend(("🤖 AI 建议:", f"   {ai_advice}", ""))
         text = "\n".join(lines)
         QMessageBox.information(self, "磁盘清理建议报告", text)
-        # 缓存本次报告及其指纹，数据未变时下次直接复用
-        if self._cleanup_fingerprint:
+        # ponytail: 仅当 AI 建议成功生成时才缓存；否则不缓存，下次重试，
+        # 避免"没额度时无 AI 建议的报告"被缓存后额度恢复也无法刷新。
+        if self._cleanup_fingerprint and ai_advice:
             self._settings.setValue("ai/cleanup_fingerprint", self._cleanup_fingerprint)
             self._settings.setValue("ai/cleanup_text", text)
 

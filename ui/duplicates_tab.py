@@ -19,6 +19,24 @@ from ui.toast import notify
 from ui.empty_state import create_empty_state
 
 
+class _MultistageDedupWorker(QThread):
+    """后台多阶段重复检测线程"""
+    done = pyqtSignal(dict)
+    error = pyqtSignal(str)
+
+    def __init__(self, detector, parent=None):
+        super().__init__(parent)
+        self._detector = detector
+
+    def run(self):
+        try:
+            stats = self._detector.run()
+            self.done.emit(stats)
+        except Exception as exc:
+            logger.exception("多阶段重复检测失败")
+            self.error.emit(str(exc))
+
+
 class DuplicatesTab(QWidget):
     """重复文件可视化页面"""
 
@@ -140,11 +158,47 @@ class DuplicatesTab(QWidget):
         self.keep_newest_btn.clicked.connect(self._keep_newest_in_group)
         bottom.addWidget(self.keep_newest_btn)
 
+        self.multistage_btn = QPushButton("🔎 多阶段重新检测")
+        self.multistage_btn.setToolTip(
+            "按 大小→快速哈希→完整哈希 三级确认重复；中断后可续算")
+        self.multistage_btn.clicked.connect(self._run_multistage_dedup)
+        bottom.addWidget(self.multistage_btn)
+
         refresh_btn = QPushButton("刷新")
         refresh_btn.clicked.connect(self.refresh_data)
         bottom.addWidget(refresh_btn)
 
         layout.addLayout(bottom)
+
+    def _run_multistage_dedup(self):
+        """后台执行多阶段重复检测，完成后刷新列表。"""
+        if getattr(self, '_dedup_worker', None) and self._dedup_worker.isRunning():
+            notify(self, "多阶段检测正在进行中，请稍候", 'info', 3000)
+            return
+        self.multistage_btn.setEnabled(False)
+        self.multistage_btn.setText("正在检测...")
+        from core.multistage_dedup import MultistageDedupDetector
+        self._dedup_worker = _MultistageDedupWorker(MultistageDedupDetector(self.file_dao))
+        self._dedup_worker.done.connect(self._on_multistage_done)
+        self._dedup_worker.error.connect(self._on_multistage_error)
+        self._dedup_worker.start()
+
+    def _on_multistage_done(self, stats: dict):
+        self.multistage_btn.setEnabled(True)
+        self.multistage_btn.setText("🔎 多阶段重新检测")
+        self._dedup_worker = None
+        notify(
+            self,
+            f"多阶段检测完成：重复组 {stats.get('dup_groups', 0)}，"
+            f"重复文件 {stats.get('dup_files', 0)} 个",
+            'success', 4000)
+        self.refresh_data()
+
+    def _on_multistage_error(self, error: str):
+        self.multistage_btn.setEnabled(True)
+        self.multistage_btn.setText("🔎 多阶段重新检测")
+        self._dedup_worker = None
+        QMessageBox.warning(self, "多阶段检测失败", error)
 
     def _on_ai_select(self):
         """点击 AI 智能选择按钮"""

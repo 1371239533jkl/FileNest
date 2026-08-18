@@ -161,6 +161,10 @@ class AIModelConfigManager:
             logger.error("provider_id 不能为空")
             return False
 
+        # ponytail: 写前重新加载最新文件，避免多个 manager 实例各自缓存
+        # 旧 _data、写入时互相覆盖（症状：设置里保存的 api_key 莫名消失）。
+        self._load()
+
         providers = self._data.setdefault("providers", {})
         providers[pid] = provider.to_dict()
 
@@ -192,6 +196,8 @@ class AIModelConfigManager:
 
     def set_active(self, provider_id: str) -> bool:
         """设置激活的提供商"""
+        # ponytail: 写前重新加载最新文件，防止覆盖其他实例刚保存的修改
+        self._load()
         if provider_id and provider_id not in self._data.get("providers", {}):
             logger.warning(f"提供商不存在: {provider_id}")
             return False

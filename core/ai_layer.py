@@ -37,12 +37,25 @@ class AILayer:
     优先级: 自定义模型配置 > config.py 默认配置 > 规则引擎降级
     """
 
+    # ponytail: 单例模式。原来每个页面各自 `AILayer()` 独立初始化后端，
+    # 导致设置里切换模型后只有部分实例 reload、其他页面仍用旧后端
+    # （症状：改 qwen 后对话仍返回 deepseek）。单例化后 reload 一次全局生效。
+    _instance: Optional["AILayer"] = None
+
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
     def __init__(self):
+        if getattr(self, "_initialized", False):
+            return
         self._model_cfg = AIModelConfigManager()
         self._backend: Optional[OpenAICompatibleBackend] = None
         self.search_parser = NLSearchParser()
         self.tag_recommender = TagRecommender()
         self._init_backend()
+        self._initialized = True
 
     def _init_backend(self):
         """初始化 AI 后端：优先使用用户自定义模型配置，否则回退 config.py"""
@@ -92,6 +105,8 @@ class AILayer:
 
     def reload_backend(self):
         """重新加载后端配置（用户修改模型配置后调用）"""
+        # ponytail: 重建 manager 以读取最新配置文件，避免单例持有过期的 _data
+        self._model_cfg = AIModelConfigManager()
         self._init_backend()
         # 清除工具注册表缓存
         self._tool_registry = None
