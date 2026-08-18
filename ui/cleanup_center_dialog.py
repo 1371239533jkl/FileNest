@@ -52,7 +52,9 @@ class _CleanupAnalysisWorker(QThread):
 
 
 class CleanupCenterDialog(QDialog):
-    """安全清理中心对话框"""
+    """安全清理中心对话框（单例复用，数据按指纹缓存）"""
+
+    _instance = None
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -63,8 +65,49 @@ class CleanupCenterDialog(QDialog):
             cls_dao=ClassificationDAO(db))
         self._items = []
         self._worker = None
+        self._loaded_fingerprint = ''  # 上次成功加载时的数据指纹
         self._build_ui()
+        # 构造时不自动分析：打开时由 ensure_fresh 按指纹决定是否刷新
+
+    @classmethod
+    def open_center(cls, parent=None) -> 'CleanupCenterDialog':
+        """单例入口：复用同一个对话框实例，避免每次全量重新分析。"""
+        if cls._instance is None:
+            cls._instance = cls(parent)
+        return cls._instance
+
+    @staticmethod
+    def _data_fingerprint() -> str:
+        """数据指纹：活跃文件统计 + 排除/误报表版本。
+
+        任一变化都视为数据已变，需要重新分析；未变化则复用缓存。
+        """
+        row = db.execute_one(
+            "SELECT COUNT(*) AS cnt, COALESCE(SUM(file_size), 0) AS total_size, "
+            "COALESCE(MAX(scan_time), '') AS last_scan FROM files WHERE status='active'") or {}
+        excl = db.execute_one("SELECT COUNT(*) AS c FROM cleanup_exclusions") or {}
+        fp = db.execute_one("SELECT COUNT(*) AS c FROM cleanup_false_positives") or {}
+        return "|".join(str(v) for v in (
+            row.get('cnt', 0), row.get('total_size', 0), row.get('last_scan', ''),
+            excl.get('c', 0), fp.get('c', 0)))
+
+    def ensure_fresh(self, force: bool = False):
+        """打开时调用：指纹未变且已加载过则直接显示，否则后台刷新。
+
+        Args:
+            force: True 强制重新分析（手动刷新按钮）。
+        """
+        if not force and self._loaded_fingerprint == self._data_fingerprint():
+            return  # 数据未变化，复用上次结果
         self._reload()
+
+    def _reload(self):
+        self.cleanup_btn.setEnabled(False)
+        self._stop_worker()
+        self._worker = _CleanupAnalysisWorker(self)
+        self._worker.done.connect(self._on_loaded)
+        self._worker.error.connect(self._on_error)
+        self._worker.start()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -122,6 +165,11 @@ class CleanupCenterDialog(QDialog):
         self.exclusions_btn.clicked.connect(self._manage_exclusions)
         bottom.addWidget(self.exclusions_btn)
 
+        self.refresh_btn = QPushButton("🔄 刷新")
+        self.refresh_btn.setToolTip("重新分析所有文件（数据变化后手动刷新）")
+        self.refresh_btn.clicked.connect(lambda: self.ensure_fresh(force=True))
+        bottom.addWidget(self.refresh_btn)
+
         layout.addLayout(bottom)
 
         close_row = QHBoxLayout()
@@ -156,6 +204,7 @@ class CleanupCenterDialog(QDialog):
 
     def _on_loaded(self, result: dict):
         self._items = result.get('all', [])
+        self._loaded_fingerprint = self._data_fingerprint()
         total_size = sum(item['file_size'] for item in self._items)
         self.summary_label.setText(
             f"共 {len(self._items)} 项建议 · 占用 {format_size(total_size)} · "
