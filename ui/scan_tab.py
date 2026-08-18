@@ -293,9 +293,13 @@ class ScanTab(QWidget):
         self.scan_worker = None
 
     def _show_cleanup_report(self):
-        """打开安全清理中心（聚合建议 + 一键移入回收区 + 排除/误报）。"""
+        """打开安全清理中心（单例复用 + 数据指纹缓存，无需每次重新分析）。"""
         from ui.cleanup_center_dialog import CleanupCenterDialog
-        CleanupCenterDialog(self).exec()
+        dlg = CleanupCenterDialog.open_center(self)
+        dlg.ensure_fresh()
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     def _show_task_center(self):
         TaskCenterDialog(self).exec()
