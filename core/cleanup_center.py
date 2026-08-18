@@ -45,7 +45,8 @@ class CleanupCenter:
             每项为文件记录 + reason。
         """
         advisor = CleanupAdvisor(self.file_dao, self.tag_dao, self.cls_dao)
-        report = advisor.analyze()
+        # 聚合中心不需要 AI 增强（避免网络调用拖慢响应、阻塞线程收尾）
+        report = advisor.analyze(enable_ai=False)
 
         exclusions = self._load_exclusions()
         false_positives = self._load_false_positives()

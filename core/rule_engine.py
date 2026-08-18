@@ -713,8 +713,13 @@ class CleanupAdvisor:
         self.tag_dao = tag_dao
         self.cls_dao = cls_dao
 
-    def analyze(self) -> Dict[str, Any]:
-        """执行全面分析，返回清理建议汇总。"""
+    def analyze(self, enable_ai: bool = True) -> Dict[str, Any]:
+        """执行全面分析，返回清理建议汇总。
+
+        Args:
+            enable_ai: 是否附加 AI 增强建议。清理中心聚合等快速场景传 False，
+                       避免网络调用拖慢响应（AI 增强不是分析的必要部分）。
+        """
         summary = {
             'total_active_files': self.file_dao.count_active(),
             'total_size': self.file_dao.get_total_size(),
@@ -756,7 +761,7 @@ class CleanupAdvisor:
         summary['total_potential_savings'] = total_savings
 
         # ── AI 增强建议（如果可用） ──
-        summary['ai_advice'] = self._generate_ai_advice(summary)
+        summary['ai_advice'] = self._generate_ai_advice(summary) if enable_ai else None
 
         return summary
 
