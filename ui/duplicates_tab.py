@@ -28,9 +28,14 @@ class _MultistageDedupWorker(QThread):
         super().__init__(parent)
         self._detector = detector
 
+    def cancel(self):
+        self.requestInterruption()
+
     def run(self):
         try:
-            stats = self._detector.run()
+            stats = self._detector.run(cancel_check=self.isInterruptionRequested)
+            if self.isInterruptionRequested():
+                return  # 页面已关闭：静默退出，不触发 done
             self.done.emit(stats)
         except Exception as exc:
             logger.exception("多阶段重复检测失败")
@@ -178,10 +183,25 @@ class DuplicatesTab(QWidget):
         self.multistage_btn.setEnabled(False)
         self.multistage_btn.setText("正在检测...")
         from core.multistage_dedup import MultistageDedupDetector
-        self._dedup_worker = _MultistageDedupWorker(MultistageDedupDetector(self.file_dao))
+        self._dedup_worker = _MultistageDedupWorker(
+            MultistageDedupDetector(self.file_dao), self)
         self._dedup_worker.done.connect(self._on_multistage_done)
         self._dedup_worker.error.connect(self._on_multistage_error)
         self._dedup_worker.start()
+
+    def _stop_dedup_worker(self):
+        """请求中断并等待后台检测线程结束，避免 QThread 销毁时仍在运行。"""
+        worker = getattr(self, '_dedup_worker', None)
+        if worker is None:
+            return
+        try:
+            worker.cancel()
+            if worker.isRunning():
+                worker.wait(10000)
+        except RuntimeError:
+            pass  # 线程对象已被 C++ 侧销毁
+        finally:
+            self._dedup_worker = None
 
     def _on_multistage_done(self, stats: dict):
         self.multistage_btn.setEnabled(True)
@@ -249,6 +269,11 @@ class DuplicatesTab(QWidget):
             self.group_table.setVisible(False)
             self.detail_table.setVisible(False)
             self._empty_state.show_error(f"无法分析重复文件：{e}")
+
+    def closeEvent(self, event):
+        """页面销毁前等待后台检测线程结束，防止 QThread 销毁崩溃。"""
+        self._stop_dedup_worker()
+        super().closeEvent(event)
 
     def _load_groups(self):
         self._total_groups = self.file_dao.count_duplicate_groups()

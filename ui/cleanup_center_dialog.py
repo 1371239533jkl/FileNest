@@ -35,11 +35,16 @@ class _CleanupAnalysisWorker(QThread):
     done = pyqtSignal(dict)
     error = pyqtSignal(str)
 
+    def cancel(self):
+        self.requestInterruption()
+
     def run(self):
         try:
             center = CleanupCenter(
                 file_dao=FileDAO(db), tag_dao=TagDAO(db),
                 cls_dao=ClassificationDAO(db))
+            if self.isInterruptionRequested():
+                return
             self.done.emit(center.analyze())
         except Exception as exc:
             logger.exception("清理中心分析失败")
@@ -57,6 +62,7 @@ class CleanupCenterDialog(QDialog):
             file_dao=FileDAO(db), tag_dao=TagDAO(db),
             cls_dao=ClassificationDAO(db))
         self._items = []
+        self._worker = None
         self._build_ui()
         self._reload()
 
@@ -129,10 +135,24 @@ class CleanupCenterDialog(QDialog):
 
     def _reload(self):
         self.cleanup_btn.setEnabled(False)
-        self._worker = _CleanupAnalysisWorker()
+        self._stop_worker()
+        self._worker = _CleanupAnalysisWorker(self)
         self._worker.done.connect(self._on_loaded)
         self._worker.error.connect(self._on_error)
         self._worker.start()
+
+    def _stop_worker(self):
+        """请求中断并等待分析线程结束，避免 QThread 销毁时仍在运行。"""
+        worker = self._worker
+        self._worker = None
+        if worker is None:
+            return
+        try:
+            worker.cancel()
+            if worker.isRunning():
+                worker.wait(10000)
+        except RuntimeError:
+            pass  # 线程对象已被 C++ 侧销毁
 
     def _on_loaded(self, result: dict):
         self._items = result.get('all', [])
@@ -145,12 +165,19 @@ class CleanupCenterDialog(QDialog):
             f"未用 {len(result.get('old', []))} / "
             f"超大 {len(result.get('large', []))}）")
         self.cleanup_btn.setEnabled(True)
+        self._worker = None
         for key in self.cat_tables:
             self._populate_table(self.cat_tables[key], result.get(key, []))
 
     def _on_error(self, error: str):
         self.cleanup_btn.setEnabled(True)
+        self._worker = None
         QMessageBox.warning(self, "清理分析失败", error)
+
+    def closeEvent(self, event):
+        """关闭对话框前等待后台线程结束，防止 QThread 销毁崩溃。"""
+        self._stop_worker()
+        super().closeEvent(event)
 
     def _populate_table(self, table: QTableWidget, items: list):
         table.setRowCount(len(items))

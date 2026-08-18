@@ -30,13 +30,15 @@ class MultistageDedupDetector:
 
     # ── 对外入口 ──────────────────────────────────────────────
 
-    def run(self, progress_cb=None, reset: bool = False) -> Dict[str, int]:
+    def run(self, progress_cb=None, reset: bool = False,
+            cancel_check=None) -> Dict[str, int]:
         """执行完整的多阶段重复检测。
 
         Args:
             progress_cb: 可选回调 (stage: str, current: int, total: int, path: str)
             reset: True 强制从头重算（清空全部哈希状态）；
                    False（默认）保留已完成阶段，中断后续算跳过已 full 的记录。
+            cancel_check: 可选无参回调，返回 True 时尽快中断（用于 UI 关闭场景）。
 
         Returns:
             {'size_groups': int, 'fast_groups': int, 'dup_groups': int,
@@ -44,6 +46,9 @@ class MultistageDedupDetector:
         """
         stats = {'size_groups': 0, 'fast_groups': 0, 'dup_groups': 0,
                  'dup_files': 0, 'fast_computed': 0, 'full_computed': 0}
+
+        def _cancelled() -> bool:
+            return cancel_check is not None and bool(cancel_check())
 
         if reset:
             # 强制重算：清空所有哈希状态
@@ -66,6 +71,8 @@ class MultistageDedupDetector:
                 progress_cb('fast', idx + 1, len(size_groups),
                             group[0].get('file_path', '') if group else '')
             for record in group:
+                if _cancelled():
+                    return stats  # 中断：保留已完成的中间结果
                 if record.get('hash_state') in (STATE_FAST, STATE_FULL):
                     continue  # 续算：跳过已完成快速哈希的记录
                 fast_hash = self._compute_fast_hash(record['file_path'])
@@ -95,6 +102,8 @@ class MultistageDedupDetector:
                             group[0].get('file_path', '') if group else '')
             full_map: Dict[str, List[dict]] = {}
             for record in group:
+                if _cancelled():
+                    return stats
                 full_hash = record.get('file_hash')
                 if not full_hash or record.get('hash_state') != STATE_FULL:
                     full_hash = self._compute_full_hash(record['file_path'])
