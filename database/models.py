@@ -75,6 +75,21 @@ class FileDAO:
         return self.db.execute_update(
             "UPDATE files SET file_hash = ? WHERE id = ?", (file_hash, file_id))
 
+    def update_hash_state(self, file_id: int, state: str) -> int:
+        """记录哈希阶段状态：size / fast / full。用于中断后续算。"""
+        return self.db.execute_update(
+            "UPDATE files SET hash_state = ? WHERE id = ?", (state, file_id))
+
+    def update_fast_hash(self, file_id: int, fast_hash: str) -> int:
+        return self.db.execute_update(
+            "UPDATE files SET fast_hash = ? WHERE id = ?", (fast_hash, file_id))
+
+    def reset_hash_state(self) -> int:
+        """扫描前重置所有活跃文件的哈希状态（旧扫描遗留）。"""
+        return self.db.execute_update(
+            "UPDATE files SET hash_state = NULL, fast_hash = NULL "
+            "WHERE status = 'active'")
+
     def get_content_fingerprint(self, file_id: int) -> Optional[str]:
         row = self.db.execute_one(
             "SELECT content_fingerprint FROM files WHERE id = ?", (file_id,))
