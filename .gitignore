@@ -1,4 +1,4 @@
-﻿# 环境变量配置（包含敏感信息）
+# 环境变量配置（包含敏感信息）
 .env
 
 # 本地回收区（删除的文件暂存）
@@ -46,9 +46,13 @@ build-lite/
 dist/
 dist-lite/
 *.spec
-pyinstaller*.log# 功能进度追踪（工作区辅助文档，不进版本库）
+pyinstaller*.log
+
+# 功能进度追踪（工作区辅助文档，不进版本库）
 docs/PROGRESS.md
 
-# 本地开发文档（除 README.md 外不进版本库）
-docs/
+# 本地开发文档：docs/ 下仅保留 README.md 与展示截图
+docs/*
 !docs/README.md
+!docs/*.png
+
