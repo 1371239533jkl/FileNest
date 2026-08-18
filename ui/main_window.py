@@ -208,6 +208,15 @@ class MainWindow(QMainWindow):
         for edit in self.findChildren(QDateEdit):
             _apply_calendar_theme(edit)
 
+        # 同步清理中心单例对话框主题（对话框是独立顶层窗口，不继承 QSS）
+        try:
+            from ui.cleanup_center_dialog import CleanupCenterDialog
+            inst = CleanupCenterDialog._instance
+            if inst is not None:
+                inst.setStyleSheet(style)
+        except Exception:
+            pass
+
     def _toggle_theme(self):
         new_theme = "light" if self._current_theme == "dark" else "dark"
         self._apply_theme(new_theme)

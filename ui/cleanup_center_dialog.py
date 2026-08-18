@@ -6,7 +6,7 @@
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QPushButton, QLabel, QMessageBox, QHeaderView, QInputDialog,
-    QCheckBox, QTabWidget, QLineEdit
+    QCheckBox, QTabWidget, QLineEdit, QWidget
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
@@ -71,9 +71,18 @@ class CleanupCenterDialog(QDialog):
 
     @classmethod
     def open_center(cls, parent=None) -> 'CleanupCenterDialog':
-        """单例入口：复用同一个对话框实例，避免每次全量重新分析。"""
+        """单例入口：复用同一个对话框实例，避免每次全量重新分析。
+
+        对话框是独立顶层窗口，不继承主窗口 QSS：创建时按宿主主题
+        直接应用完整主题样式，避免浅色模式下残留黑色背景。
+        """
         if cls._instance is None:
+            from ui.styles import DARK_STYLE, LIGHT_STYLE
+            host = parent.window() if parent is not None else None
+            theme = getattr(host, '_current_theme', 'dark') if host is not None else 'dark'
             cls._instance = cls(parent)
+            cls._instance.setStyleSheet(
+                DARK_STYLE if theme == 'dark' else LIGHT_STYLE)
         return cls._instance
 
     @staticmethod
@@ -130,6 +139,7 @@ class CleanupCenterDialog(QDialog):
             table.setSelectionMode(QTableWidget.SelectionMode.MultiSelection)
             table.setAlternatingRowColors(True)
             table.setColumnWidth(4, 110)
+            table.verticalHeader().setDefaultSectionSize(36)
             self.cat_tables[key] = table
             self.tabs.addTab(table, f"{CATEGORY_ICONS[key]} {name}")
         layout.addWidget(self.tabs, 1)
@@ -240,7 +250,15 @@ class CleanupCenterDialog(QDialog):
             btn.setFixedSize(96, 26)
             btn.clicked.connect(
                 lambda _checked=False, fid=item['file_id']: self._cleanup_one(fid))
-            table.setCellWidget(i, 4, btn)
+            # 容器显式透明背景 + 水平/垂直居中，避免 setCellWidget 左上角对齐错位
+            btn_widget = QWidget()
+            btn_widget.setAutoFillBackground(False)
+            btn_widget.setStyleSheet("background: transparent;")
+            btn_layout = QHBoxLayout(btn_widget)
+            btn_layout.setContentsMargins(0, 0, 0, 0)
+            btn_layout.setAlignment(btn, Qt.AlignmentFlag.AlignCenter)
+            btn_layout.addWidget(btn)
+            table.setCellWidget(i, 4, btn_widget)
 
     def _selected_items(self) -> list:
         """返回当前激活 Tab 中选中的建议项。"""

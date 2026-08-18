@@ -13,6 +13,10 @@ QMainWindow {
     font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
     font-size: 13px;
 }
+QDialog {
+    background-color: #0f0f1a;
+    color: #e8e8ef;
+}
 QWidget#appCentral, QStackedWidget#contentPanel {
     background-color: #0f0f1a;
 }
@@ -529,6 +533,10 @@ QMainWindow {
     color: #333333;
     font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
     font-size: 13px;
+}
+QDialog {
+    background-color: #f5f7fa;
+    color: #333333;
 }
 QLabel#scanPathLabel {
     color: #a0a0b0;
