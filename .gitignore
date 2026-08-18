@@ -1,4 +1,4 @@
-# 环境变量配置（包含敏感信息）
+﻿# 环境变量配置（包含敏感信息）
 .env
 
 # 本地回收区（删除的文件暂存）
@@ -50,6 +50,5 @@ pyinstaller*.log# 功能进度追踪（工作区辅助文档，不进版本库�
 docs/PROGRESS.md
 
 # 本地开发文档（除 README.md 外不进版本库）
-USER_GUIDE.md
 docs/
 !docs/README.md
