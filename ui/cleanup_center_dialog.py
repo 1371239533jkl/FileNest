@@ -76,14 +76,23 @@ class CleanupCenterDialog(QDialog):
         对话框是独立顶层窗口，不继承主窗口 QSS：创建时按宿主主题
         直接应用完整主题样式，避免浅色模式下残留黑色背景。
         """
+        host = parent.window() if parent is not None else None
+        theme = getattr(host, '_current_theme', 'dark') if host is not None else 'dark'
+
         if cls._instance is None:
             from ui.styles import DARK_STYLE, LIGHT_STYLE
-            host = parent.window() if parent is not None else None
-            theme = getattr(host, '_current_theme', 'dark') if host is not None else 'dark'
             cls._instance = cls(parent)
             cls._instance.setStyleSheet(
                 DARK_STYLE if theme == 'dark' else LIGHT_STYLE)
+        else:
+            # 单例已存在则强制刷新主题样式，确保浅色模式下不留残黑
+            cls._instance.apply_theme(theme)
         return cls._instance
+
+    def apply_theme(self, theme: str):
+        """重新应用主题样式（处理主题切换场景）"""
+        from ui.styles import DARK_STYLE, LIGHT_STYLE
+        self.setStyleSheet(DARK_STYLE if theme == 'dark' else LIGHT_STYLE)
 
     @staticmethod
     def _data_fingerprint() -> str:
@@ -247,17 +256,25 @@ class CleanupCenterDialog(QDialog):
             table.setItem(i, 2, QTableWidgetItem(format_size(item.get('file_size', 0))))
             table.setItem(i, 3, QTableWidgetItem(item.get('reason', '')))
             btn = QPushButton("移入回收区")
-            btn.setFixedSize(96, 26)
+            btn.setFixedSize(92, 24)
+            # 覆盖全局 QSS 的 padding，避免文字被挤压裁切
+            btn.setStyleSheet("padding: 1px 6px; font-size: 11px;")
             btn.clicked.connect(
                 lambda _checked=False, fid=item['file_id']: self._cleanup_one(fid))
-            # 容器显式透明背景 + 水平/垂直居中，避免 setCellWidget 左上角对齐错位
+            # 双轴居中：上下/左右 stretch 包裹，让按钮真正落在单元格中心
             btn_widget = QWidget()
-            btn_widget.setAutoFillBackground(False)
-            btn_widget.setStyleSheet("background: transparent;")
-            btn_layout = QHBoxLayout(btn_widget)
-            btn_layout.setContentsMargins(0, 0, 0, 0)
-            btn_layout.setAlignment(btn, Qt.AlignmentFlag.AlignCenter)
-            btn_layout.addWidget(btn)
+            outer = QVBoxLayout(btn_widget)
+            outer.setContentsMargins(0, 0, 0, 0)
+            outer.setSpacing(0)
+            outer.addStretch()
+            inner = QHBoxLayout()
+            inner.setContentsMargins(0, 0, 0, 0)
+            inner.setSpacing(0)
+            inner.addStretch()
+            inner.addWidget(btn)
+            inner.addStretch()
+            outer.addLayout(inner)
+            outer.addStretch()
             table.setCellWidget(i, 4, btn_widget)
 
     def _selected_items(self) -> list:
