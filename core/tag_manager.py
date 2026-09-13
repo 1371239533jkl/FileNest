@@ -13,10 +13,17 @@ class TagManager:
     def __init__(self):
         self.tag_dao = TagDAO(db)
 
+    def _resolve(self, tag_name: str) -> str:
+        """P1-10: 别名 → 规范名（打标签/建标签时自动归一，非别名原样返回）"""
+        try:
+            return self.tag_dao.resolve_alias(tag_name)
+        except Exception:
+            return tag_name
+
     def add_tag(self, file_id: int, tag_name: str) -> bool:
         """给文件打标签"""
         try:
-            return self.tag_dao.add_tag(file_id, tag_name) > 0
+            return self.tag_dao.add_tag(file_id, self._resolve(tag_name)) > 0
         except Exception as e:
             logger.warning(f"打标签失败 file_id={file_id}: {e}")
             return False
@@ -24,7 +31,7 @@ class TagManager:
     def create_tag(self, tag_name: str) -> bool:
         """创建独立标签（不关联文件）"""
         try:
-            return self.tag_dao.create_tag(tag_name) > 0
+            return self.tag_dao.create_tag(self._resolve(tag_name)) > 0
         except Exception as e:
             logger.warning(f"创建标签失败: {e}")
             return False
@@ -40,7 +47,8 @@ class TagManager:
     def batch_add_tags(self, file_ids: list, tag_names: list) -> int:
         """批量给多个文件加多个标签"""
         try:
-            return self.tag_dao.batch_add_tags(file_ids, tag_names)
+            return self.tag_dao.batch_add_tags(
+                file_ids, [self._resolve(t) for t in tag_names])
         except Exception as e:
             logger.warning(f"批量打标签失败: {e}")
             return 0
