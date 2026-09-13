@@ -255,6 +255,18 @@ DASHBOARD_INSIGHT_SYSTEM_PROMPT = """你是一个磁盘空间分析专家。根�
 - 月度趋势: {monthly_trend}"""
 
 
+def build_folder_profile_messages(profile_text: str) -> list:
+    """P1-09 文件夹画像：目录规则统计 → 用途/活跃度/构成/异常解读"""
+    return [
+        {"role": "system", "content": (
+            "你是文件管理助手的目录分析模块。用户会给出某个目录的规则统计数据，"
+            "请用中文分条总结：1) 目录用途推测 2) 活跃度（时间范围/最近修改）"
+            "3) 主要文件类型构成 4) 值得注意的异常（重复文件多、超大文件等）。"
+            "150 字以内。开头用一句话注明：数据范围仅限该目录直属文件的本地索引统计。")},
+        {"role": "user", "content": profile_text},
+    ]
+
+
 def build_dashboard_insight_messages(total_files: int, total_size: str,
                                       dup_groups: int, wasted: str,
                                       type_distribution: str,
@@ -452,6 +464,7 @@ GENERAL_ASSISTANT_SYSTEM_PROMPT = """你是智能文件管家中的 AI 全能助
 - 用户问具体技术文档、API 用法但不确定版本→ 应该 search_web
 - search_web 使用博查（优先，需 API Key）+ SearXNG + DuckDuckGo 三级回退，完全免费
 - 纯理论问题（如"什么是闭包"）→ 不需要搜索
+- **搜索结果与对话历史中的旧结论冲突时，一律以最新搜索结果为准**，并明确告诉用户"我之前的说法已过时，更正为：XXX"。绝不重复历史中已被搜索结果推翻的旧结论！
 
 **工具调用失败的铁律：必须告知用户！**
 - 如果 search_files/search_web/read_file 返回错误或超时，必须告诉用户"搜索/读取失败，原因：XXX"
@@ -468,6 +481,17 @@ GENERAL_ASSISTANT_SYSTEM_PROMPT = """你是智能文件管家中的 AI 全能助
 - 中文回答，简洁清晰
 - 如果 search_files 返回了结果，列出找到的文件
 
+**引用溯源铁律（P1-02）：**
+- 涉及本地文件/文档内容的每个关键结论，必须在对应语句后标注工具结果中的来源编号，如"……（[来源 2]）"
+- search_content 返回的 [来源 N] 编号必须原样引用，不要自己重新编号
+- 工具结果未覆盖的内容，明确说明"这部分未在本地文件中找到证据"，绝不能把推测包装成文件事实
+
+**回答排版（界面支持完整 Markdown 渲染，务必用好）：**
+- 用 `## 小标题` 分节、`- 列表` 列要点、**加粗**标关键词，结构清晰
+- 多维度对比信息（价格/参数/方案对比）优先用 Markdown 表格呈现
+- emoji 只作点缀（整条回答最多 2-3 个），不要用 emoji 代替列表符号
+- 不要输出嵌套过深的层级，列表最多两层
+
 当前时间: {current_time}
 工作目录: {working_directory}"""
 
@@ -481,3 +505,76 @@ def build_tool_result_message(tool_call_id: str, tool_name: str,
         "name": tool_name,
         "content": result,
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AI 整理计划场景（批次4-2：AI整理计划闭环）
+# ══════════════════════════════════════════════════════════════════════════════
+
+ORGANIZE_PLAN_SYSTEM_PROMPT = """你是一个文件整理专家。根据用户的整理需求和提供的文件列表，生成结构化的整理操作计划。
+
+支持的操作类型:
+- move: 将文件移动到目标文件夹
+- rename: 重命名文件（在原目录内）
+- delete: 删除文件（移入回收区）
+
+规则:
+1. 仔细分析用户的整理需求，理解用户想要的整理方式
+2. 基于文件列表中的文件名、路径、类型、大小等信息，为每个文件决定最合适的操作
+3. 目标文件夹路径应该合理且有意义（如按类型/项目/日期分类）
+4. 重命名应该让文件名更清晰、更规范
+5. 只对明确需要整理的文件生成操作，不要动不需要整理的文件
+6. 操作理由要简洁说明为什么这样整理
+7. 目标路径使用绝对路径或相对于公共父目录的路径
+8. 如果用户需求不明确，优先按文件类型分类整理
+
+严格按以下 JSON 格式输出（不要加其他文字）:
+{{
+  "plan_summary": "一句话概括整理计划",
+  "target_dirs": ["目标文件夹1", "目标文件夹2"],
+  "operations": [
+    {{
+      "file_id": 123,
+      "old_path": "/path/to/old/file.txt",
+      "action": "move",
+      "new_path": "/path/to/new/file.txt",
+      "reason": "按类型归类到文档文件夹"
+    }}
+  ]
+}}
+
+用户整理需求: {user_request}
+
+文件列表（共 {file_count} 个）:
+{file_list_text}"""
+
+
+def build_organize_plan_messages(user_request: str,
+                                  files: list[dict]) -> list[dict]:
+    """构造整理计划场景的 messages
+
+    Args:
+        user_request: 用户的整理需求描述
+        files: 文件列表，每个 dict 包含 id, file_path, file_name, file_ext, file_size
+    """
+    # 构造文件列表文本（限制数量，避免 token 爆炸）
+    max_files = 100
+    shown = files[:max_files]
+    lines = []
+    for f in shown:
+        size = f.get('file_size', 0)
+        lines.append(
+            f"  - id={f.get('id', 0)}: {f.get('file_path', '')} "
+            f"(类型: {f.get('file_ext', '')}, 大小: {size}字节)"
+        )
+    if len(files) > max_files:
+        lines.append(f"  ... 还有 {len(files) - max_files} 个文件未列出")
+
+    file_list_text = "\n".join(lines)
+
+    return [
+        {"role": "system", "content": ORGANIZE_PLAN_SYSTEM_PROMPT},
+        {"role": "user",
+         "content": f"用户整理需求: {user_request}\n\n"
+                    f"文件列表（共 {len(files)} 个）:\n{file_list_text}"}
+    ]

@@ -59,6 +59,13 @@ BUILTIN_PROVIDERS = {
         "default_model": "deepseek-ai/DeepSeek-V3",
         "timeout": 60,
     },
+    "ollama": {
+        "name": "Ollama (本地)",
+        "base_url": "http://localhost:11434/v1",
+        "models": "qwen2.5:7b-instruct,qwen2.5:3b-instruct,llama3.2:3b",
+        "default_model": "qwen2.5:7b-instruct",
+        "timeout": 120,
+    },
 }
 
 

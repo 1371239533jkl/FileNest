@@ -39,6 +39,9 @@ class ToolDefinition:
     handler: Callable[..., str]            # 执行函数，接收 **kwargs，返回文本结果
     requires_db: bool = False              # 是否需要数据库连接
     db_manager: Any = None                 # 数据库管理器实例（延迟注入）
+    # P1-02 引用溯源：handler 执行成功时把命中的文件证据追加到此列表
+    # 元素格式: {"file_id": int|None, "file_name": str, "file_path": str, "snippet": str|None}
+    sources: list = field(default_factory=list)
 
     def execute(self, arguments: dict) -> str:
         """执行工具并返回文本结果"""
@@ -101,6 +104,35 @@ class ToolRegistry:
             return f"[错误] 未知工具: {tool_name}，可用工具: {', '.join(self.list_tools())}"
         return tool.execute(arguments)
 
+    # ── P1-02 引用溯源 ──
+
+    def clear_sources(self) -> None:
+        """清空全部工具收集的来源（每轮新提问前调用，防止跨问题串引用）"""
+        for t in self._tools.values():
+            t.sources.clear()
+
+    def add_sources(self, items: list[dict]) -> None:
+        """P1-02: 注入外部来源（如语义检索命中）。
+
+        追加到每个工具的来源表，使 search_content 的全局编号 [来源 N]
+        在外部来源之后继续编号，与气泡合并后的引用列表严格对齐。
+        """
+        for t in self._tools.values():
+            t.sources.extend(items or [])
+
+    def get_sources(self) -> list[dict]:
+        """汇总各工具收集的引用来源（按 file_id/file_path 去重，保持出现顺序）"""
+        merged: list[dict] = []
+        seen: set = set()
+        for t in self._tools.values():
+            for s in getattr(t, "sources", []):
+                key = s.get("file_id") or s.get("file_path")
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                merged.append(s)
+        return merged[:30]
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 预设工具：文件搜索
@@ -109,7 +141,8 @@ class ToolRegistry:
 def _search_files_handler(query: str = None, file_type: str = None,
                           start_date: str = None, end_date: str = None,
                           min_size: int = None, max_size: int = None,
-                          max_results: int = 500, _db=None, _ai_layer=None) -> str:
+                          max_results: int = 500, _db=None, _ai_layer=None,
+                          _sources: list = None) -> str:
     """搜索本地文件数据库 —— 支持关键词、日期范围、大小范围、文件类型过滤"""
     if _db is None:
         return "[错误] 文件搜索工具未连接数据库"
@@ -171,6 +204,15 @@ def _search_files_handler(query: str = None, file_type: str = None,
         rows.sort(key=_sort_key, reverse=True)
 
         total_size = sum(r.get('file_size', 0) for r in rows)
+        # P1-02: 记录命中文件证据（供气泡引用溯源 chip 使用）
+        if _sources is not None:
+            for r in rows[:20]:
+                _sources.append({
+                    "file_id": r.get('id'),
+                    "file_name": r.get('file_name', ''),
+                    "file_path": r.get('file_path', ''),
+                    "snippet": None,
+                })
         lines = [f"找到 {len(rows)} 个文件（总大小: {_format_bytes(total_size)}）:"]
         for r in rows:
             size_str = _format_bytes(r.get('file_size', 0))
@@ -229,9 +271,13 @@ _search_files_schema = {
 
 def create_search_files_tool(db_manager=None, ai_layer=None) -> ToolDefinition:
     """创建文件搜索工具（注入数据库依赖）"""
+    sources: list = []
+
     def handler(**kwargs):
-        return _search_files_handler(**kwargs, _db=db_manager, _ai_layer=ai_layer)
-    return ToolDefinition(
+        return _search_files_handler(
+            **kwargs, _db=db_manager, _ai_layer=ai_layer, _sources=sources)
+
+    tool = ToolDefinition(
         name="search_files",
         description="搜索本地文件数据库。当你需要查找用户电脑上的文件时使用此工具。支持按文件名、路径关键词搜索，可按文件类型过滤。",
         parameters=_search_files_schema,
@@ -239,13 +285,16 @@ def create_search_files_tool(db_manager=None, ai_layer=None) -> ToolDefinition:
         requires_db=True,
         db_manager=db_manager,
     )
+    tool.sources = sources  # 与 handler 共享同一列表
+    return tool
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 预设工具：已索引正文检索
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _search_content_handler(query: str, max_results: int = 8, _db=None) -> str:
+def _search_content_handler(query: str, max_results: int = 8, _db=None,
+                            _sources: list = None) -> str:
     """Search only the local extracted-text index and return cited snippets."""
     if _db is None:
         return "[错误] 正文检索工具未连接数据库"
@@ -262,11 +311,24 @@ def _search_content_handler(query: str, max_results: int = 8, _db=None) -> str:
             return ("未在已建立正文索引的文件中找到匹配内容。"
                     "可提醒用户先在搜索页或扫描页执行“构建正文索引”。")
 
-        lines = [f"正文检索“{query}”命中 {len(rows)} 个文件。回答时请引用 [来源 N]："]
+        # P1-02: 编号在同一轮提问内全局连续（跨多次工具调用不重号），
+        # 与 UI 气泡合并后的引用列表索引严格一一对应
+        base = len(_sources) if _sources is not None else 0
+        lines = [
+            f"正文检索“{query}”命中 {len(rows)} 个文件。"
+            f"回答时请在对应结论后标注 [来源 N]（N 为下方来源的全局编号）："
+        ]
         for index, row in enumerate(rows, 1):
             snippet = (row.get('content_snippet') or '').replace('\n', ' ').strip()
+            if _sources is not None:
+                _sources.append({
+                    "file_id": row.get('id'),
+                    "file_name": row.get('file_name', '未知文件'),
+                    "file_path": row.get('file_path', ''),
+                    "snippet": snippet,
+                })
             lines.append(
-                f"[来源 {index}] {row.get('file_name', '未知文件')} | "
+                f"[来源 {base + index}] {row.get('file_name', '未知文件')} | "
                 f"路径: {row.get('file_path', '')} | 摘录: {snippet}"
             )
         return "\n".join(lines)
@@ -296,15 +358,19 @@ _search_content_schema = {
 
 def create_search_content_tool(db_manager=None) -> ToolDefinition:
     """Create a read-only local content-search tool with source citations."""
-    return ToolDefinition(
+    sources: list = []
+    tool = ToolDefinition(
         name="search_content",
         description=("检索用户已建立索引的本地文档正文。适合回答文档中提到什么、"
                      "查找某个术语或根据文档内容归纳时使用。结果包含可追溯的文件来源和摘录。"),
         parameters=_search_content_schema,
-        handler=lambda **kwargs: _search_content_handler(**kwargs, _db=db_manager),
+        handler=lambda **kwargs: _search_content_handler(
+            **kwargs, _db=db_manager, _sources=sources),
         requires_db=True,
         db_manager=db_manager,
     )
+    tool.sources = sources
+    return tool
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -384,6 +450,9 @@ def _search_with_bocha(query: str, max_results: int) -> Optional[str]:
             lines = [f"网页搜索 '{query}' 的结果 (via Bocha):"]
             for i, e in enumerate(entries[:max_results]):
                 lines.append(f"{i+1}. {e.get('name','无标题')}")
+                date = (e.get("datePublished") or e.get("dateLastCrawled") or "")[:10]
+                if date:
+                    lines.append(f"   发布日期: {date}")
                 snippet = e.get("snippet", e.get("summary", ""))
                 if snippet:
                     lines.append(f"   {snippet[:200]}")
@@ -535,7 +604,8 @@ def _get_allowed_read_roots(db_manager) -> list[Path]:
             if row.get('directory_path')]
 
 
-def _read_file_handler(file_path: str, max_chars: int = 8000, _db=None) -> str:
+def _read_file_handler(file_path: str, max_chars: int = 8000, _db=None,
+                       _sources: list = None) -> str:
     """读取本地文件内容 —— 智能识别类型：.docx/.pdf/.pptx 用专用库提取文本"""
     max_chars = max(1, min(int(max_chars), 8000))
     # The model may only read files from directories the user explicitly scanned.
@@ -567,6 +637,17 @@ def _read_file_handler(file_path: str, max_chars: int = 8000, _db=None) -> str:
     ext = os.path.splitext(file_path)[1].lower()
     basename = os.path.basename(file_path)
 
+    def _with_source(text: str) -> str:
+        """P1-02: 成功提取内容时记录文件证据（供气泡引用溯源）"""
+        if _sources is not None:
+            _sources.append({
+                "file_id": None,
+                "file_name": basename,
+                "file_path": file_path,
+                "snippet": None,
+            })
+        return text
+
     # ── .docx 文档 ──
     if ext == '.docx':
         try:
@@ -577,7 +658,9 @@ def _read_file_handler(file_path: str, max_chars: int = 8000, _db=None) -> str:
             if not content:
                 return f"[空文档] {basename} ({size_str}) — 文档中未发现可见文本内容"
             truncated = " ...(内容已截断)" if len(content) > max_chars else ""
-            return f"文件: {basename} ({size_str}, 提取 {min(len(content), max_chars)} 字符) [Word 文档]:\n```\n{content[:max_chars]}{truncated}\n```"
+            return _with_source(
+                f"文件: {basename} ({size_str}, 提取 {min(len(content), max_chars)} 字符) [Word 文档]:\n```\n{content[:max_chars]}{truncated}\n```"
+            )
         except Exception as e:
             return f"[读取错误] 无法解析 Word 文档 {basename}: {e}"
 
@@ -594,7 +677,7 @@ def _read_file_handler(file_path: str, max_chars: int = 8000, _db=None) -> str:
             if not full_text.strip():
                 return f"[空文档] {basename} ({size_str}, {page_count}页) — PDF 中未发现可见文本（可能是扫描版图片 PDF）"
             truncated = " ...(内容已截断)" if len(full_text) > max_chars else ""
-            return (
+            return _with_source(
                 f"文件: {basename} ({size_str}, {page_count}页, 提取 {min(len(full_text), max_chars)} 字符) [PDF 文档]:\n"
                 f"```\n{full_text[:max_chars]}{truncated}\n```"
             )
@@ -621,7 +704,9 @@ def _read_file_handler(file_path: str, max_chars: int = 8000, _db=None) -> str:
             if not content.strip():
                 return f"[空文档] {basename} ({size_str}) — PPT 中未发现可见文本"
             truncated = " ...(内容已截断)" if len(content) > max_chars else ""
-            return f"文件: {basename} ({size_str}, 提取 {min(len(content), max_chars)} 字符) [PPT 演示文稿]:\n```\n{content[:max_chars]}{truncated}\n```"
+            return _with_source(
+                f"文件: {basename} ({size_str}, 提取 {min(len(content), max_chars)} 字符) [PPT 演示文稿]:\n```\n{content[:max_chars]}{truncated}\n```"
+            )
         except Exception as e:
             return f"[读取错误] 无法解析 PPT 文件 {basename}: {e}"
 
@@ -653,7 +738,7 @@ def _read_file_handler(file_path: str, max_chars: int = 8000, _db=None) -> str:
     truncated = " ...(内容已截断)" if len(content) >= max_chars else ""
     lang = ext.lstrip(".") if ext else "text"
 
-    return f"文件: {basename} ({size_str}):\n```{lang}\n{content}{truncated}\n```"
+    return _with_source(f"文件: {basename} ({size_str}):\n```{lang}\n{content}{truncated}\n```")
 
 
 _read_file_schema = {
@@ -675,12 +760,16 @@ _read_file_schema = {
 
 def create_read_file_tool(db_manager=None) -> ToolDefinition:
     """创建文件读取工具"""
-    return ToolDefinition(
+    sources: list = []
+    tool = ToolDefinition(
         name="read_file",
         description="读取本地文件内容并提取文本。支持常见格式：.txt/.md/.py/.js 等文本文件、.docx Word文档、.pdf（含文字）、.pptx 演示文稿。图片/音视频等二进制文件会提示无法读取。",
         parameters=_read_file_schema,
-        handler=lambda **kwargs: _read_file_handler(**kwargs, _db=db_manager),
+        handler=lambda **kwargs: _read_file_handler(
+            **kwargs, _db=db_manager, _sources=sources),
     )
+    tool.sources = sources
+    return tool
 
 
 # ══════════════════════════════════════════════════════════════════════════════
