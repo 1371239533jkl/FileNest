@@ -14,7 +14,9 @@ AI 主入口层 —— 统一封装 LLM 调用 + 降级策略 + 多后端支持�
 from typing import Optional, List, Tuple, Generator
 
 from core.ai_backends import OpenAICompatibleBackend, AIResult, AIStreamChunk
+from core.ollama_backend import OllamaBackend
 from core.ai_model_config import AIModelConfigManager
+from core.ai_privacy import AIPrivacy
 from core.ai_prompts import (
     build_search_messages, build_tag_messages,
     build_summary_messages, build_qa_messages,
@@ -54,11 +56,34 @@ class AILayer:
         self._backend: Optional[OpenAICompatibleBackend] = None
         self.search_parser = NLSearchParser()
         self.tag_recommender = TagRecommender()
+        self.privacy = AIPrivacy()
         self._init_backend()
         self._initialized = True
 
+    def _log_call(self, call_type: str, result: Optional[AIResult] = None,
+                  file_count: int = 0, file_paths: Optional[list[str]] = None,
+                  success: bool = True, error_msg: str = ""):
+        """记录 AI 调用日志。"""
+        try:
+            model = getattr(self._backend, "model", "") if self._backend else ""
+            backend = "local" if isinstance(self._backend, OllamaBackend) else "cloud"
+            prompt_tokens = result.prompt_tokens if result else 0
+            completion_tokens = result.completion_tokens if result else 0
+            latency_ms = result.latency_ms if result else 0
+            self.privacy.log_call(
+                call_type=call_type, model=model, backend=backend,
+                prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+                latency_ms=latency_ms, file_count=file_count,
+                file_paths=file_paths, success=success, error_msg=error_msg,
+            )
+        except Exception:
+            pass
+
     def _init_backend(self):
-        """初始化 AI 后端：优先使用用户自定义模型配置，否则回退 config.py"""
+        """初始化 AI 后端：优先使用用户自定义模型配置，否则回退 config.py，最后尝试本地 Ollama。
+
+        优先级: 自定义配置 → config.py 默认 → 本地 Ollama（自动发现）
+        """
         active = self._model_cfg.get_active()
         if active and active.api_key:
             try:
@@ -87,11 +112,63 @@ class AILayer:
             except Exception as e:
                 logger.error(f"默认 AI 后端初始化失败: {e}")
 
+        # 最后尝试：自动发现本地 Ollama
+        # ponytail: 不主动拉取模型，只检测服务是否运行 + 已有模型。
+        # 用户没配 API Key 但装了 Ollama 时自动启用，零配置体验。
+        try:
+            ok, info = OllamaBackend.is_available()
+            if ok:
+                models = OllamaBackend.list_local_models()
+                if models:
+                    # 选第一个可用的 instruct/chat 模型
+                    model_name = models[0]["name"]
+                    for m in models:
+                        name = m.get("name", "").lower()
+                        if "instruct" in name or "chat" in name:
+                            model_name = m["name"]
+                            break
+                    self._backend = OllamaBackend(model=model_name)
+                    logger.info(f"AI 已启用 (本地 Ollama): {model_name}")
+                    return
+        except Exception as e:
+            logger.debug(f"Ollama 自动发现跳过: {e}")
+
         logger.warning("AI 未启用：未配置任何可用的 AI 后端")
 
     @property
     def enabled(self) -> bool:
         return self._backend is not None
+
+    def health_check(self) -> tuple[bool, str]:
+        """检测当前后端是否健康可用。"""
+        if not self._backend:
+            return False, "未配置 AI 后端"
+        try:
+            return self._backend.health_check()
+        except Exception as e:
+            return False, str(e)[:100]
+
+    def get_backend_info(self) -> dict:
+        """获取当前后端信息。"""
+        if not self._backend:
+            return {"available": False, "name": "未配置", "model": ""}
+        name = "本地 Ollama" if isinstance(self._backend, OllamaBackend) else "云端 API"
+        return {
+            "available": True,
+            "name": name,
+            "model": getattr(self._backend, "model", ""),
+            "base_url": getattr(self._backend, "base_url", ""),
+        }
+
+    def embeddings(self, texts: list[str], model: str | None = None) -> list[list[float]] | None:
+        """生成文本 embedding 向量。失败返回 None。"""
+        if not self._backend:
+            return None
+        try:
+            return self._backend.embeddings(texts, model=model)
+        except Exception as e:
+            logger.error(f"Embedding 失败: {e}")
+            return None
 
     @property
     def backend_model_name(self) -> str:
@@ -178,12 +255,16 @@ class AILayer:
                         return params, "rules"
 
                     logger.info(f"AI 搜索解析成功: {params.get('_explanation', '')} ({result.latency_ms}ms)")
+                    self._log_call("search", result=result, success=True)
                     return params, "ai"
                 else:
                     logger.warning("AI 搜索解析失败，降级规则引擎")
+                    self._log_call("search", result=result, success=False,
+                                   error_msg="解析失败")
 
             except Exception as e:
                 logger.warning(f"AI 搜索调用失败: {e}，降级规则引擎")
+                self._log_call("search", success=False, error_msg=str(e)[:100])
 
         logger.debug(f"降级规则引擎解析搜索: {query!r}")
         params = self.search_parser.parse(query)
@@ -254,10 +335,13 @@ class AILayer:
                 largest_file=largest_file,
             )
             result = self._backend.chat(messages, max_tokens=300, temperature=0.3)
+            self._log_call("summarize", result=result, file_count=len(files))
             return ResponseParser.extract_plain_text(result.content)
 
         except Exception as e:
             logger.warning(f"AI 摘要生成失败: {e}")
+            self._log_call("summarize", success=False, error_msg=str(e)[:100],
+                           file_count=len(files))
             return None
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -420,6 +504,24 @@ class AILayer:
     # ══════════════════════════════════════════════════════════════════════════
     # 清理建议增强（Phase 1-2：AI 增强清理建议）
     # ══════════════════════════════════════════════════════════════════════════
+
+    def describe_directory(self, dir_path: str, profile_text: str) -> Optional[str]:
+        """P1-09 文件夹画像：AI 解读目录规则统计。
+
+        Returns:
+            解读文本，或 None（AI 不可用时——UI 回退为纯规则统计展示）
+        """
+        if not self.enabled:
+            return None
+        try:
+            from core.ai_prompts import build_folder_profile_messages
+            result = self._backend.chat(
+                build_folder_profile_messages(profile_text),
+                max_tokens=400, temperature=0.3)
+            return ResponseParser.extract_plain_text(result.content)
+        except Exception as e:
+            logger.warning(f"AI 文件夹画像失败: {e}")
+            return None
 
     def enhance_cleanup_advice(self, categories_text: str) -> Optional[str]:
         """对规则引擎的清理分析结果做 AI 增强。
@@ -707,3 +809,84 @@ class AILayer:
             conversation.update_title(conversation.get_auto_title())
 
         return response
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # AI 整理计划（批次4-2：AI整理计划闭环）
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def generate_organize_plan(self, user_request: str,
+                                files: list[dict]) -> Optional[dict]:
+        """根据用户需求和文件列表，生成 AI 整理计划。
+
+        Args:
+            user_request: 用户的整理需求描述
+            files: 文件列表 [{"id": ..., "file_path": ..., "file_name": ...,
+                            "file_ext": ..., "file_size": ...}, ...]
+
+        Returns:
+            整理计划 dict:
+            {
+                "plan_summary": "...",
+                "target_dirs": ["..."],
+                "operations": [
+                    {"file_id": ..., "old_path": "...", "action": "move|rename|delete",
+                     "new_path": "...", "reason": "..."},
+                    ...
+                ]
+            }
+            失败返回 None
+        """
+        if not self.enabled or not files:
+            return None
+
+        try:
+            from core.ai_prompts import build_organize_plan_messages
+            messages = build_organize_plan_messages(user_request, files)
+            result = self._backend.chat(
+                messages, max_tokens=2000, temperature=0.2
+            )
+
+            # 解析 JSON
+            import json
+            content = result.content.strip()
+            # 尝试提取 JSON 块
+            if '```json' in content:
+                start = content.index('```json') + 7
+                end = content.index('```', start)
+                content = content[start:end].strip()
+            elif '```' in content:
+                start = content.index('```') + 3
+                end = content.index('```', start)
+                content = content[start:end].strip()
+
+            plan = json.loads(content)
+
+            # 基本校验
+            if not isinstance(plan, dict) or 'operations' not in plan:
+                logger.warning("AI 整理计划格式不正确")
+                return None
+
+            ops = plan.get('operations', [])
+            valid_ops = []
+            for op in ops:
+                if not isinstance(op, dict):
+                    continue
+                action = op.get('action', '')
+                if action not in ('move', 'rename', 'delete'):
+                    continue
+                if not op.get('old_path') or not op.get('file_id'):
+                    continue
+                if action in ('move', 'rename') and not op.get('new_path'):
+                    continue
+                valid_ops.append(op)
+
+            plan['operations'] = valid_ops
+            logger.info(
+                f"AI 整理计划: {len(valid_ops)} 个操作 "
+                f"({result.latency_ms}ms)"
+            )
+            return plan
+
+        except Exception as e:
+            logger.error(f"AI 整理计划生成失败: {e}")
+            return None

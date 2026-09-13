@@ -284,6 +284,67 @@ class OpenAICompatibleBackend:
             logger.error(f"AI API Stream 异常: {e}")
             raise
 
+    def embeddings(self, texts: list[str], model: str | None = None) -> list[list[float]]:
+        """生成文本的 embedding 向量。
+
+        Args:
+            texts: 文本列表
+            model: 向量模型名（对话模型通常不支持 /embeddings，需单独指定）
+
+        Returns:
+            list[list[float]]: 每个文本对应的向量
+        """
+        t0 = time.time()
+        try:
+            resp = self.client.post(
+                f"{self.base_url}/embeddings",
+                json={
+                    "model": model or self.model,
+                    "input": texts,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            vectors = []
+            for item in data.get("data", []):
+                vectors.append(item.get("embedding", []))
+
+            latency = int((time.time() - t0) * 1000)
+            usage = data.get("usage", {})
+            logger.info(
+                f"AI Embeddings: model={self.model}, texts={len(texts)}, "
+                f"tokens={usage.get('prompt_tokens', 0)}, latency={latency}ms"
+            )
+            return vectors
+
+        except httpx.HTTPStatusError as e:
+            logger.error(f"AI Embeddings HTTP {e.response.status_code}: {e.response.text[:200]}")
+            raise
+        except httpx.TimeoutException:
+            logger.error(f"AI Embeddings 超时 ({self.timeout}s)")
+            raise
+        except Exception as e:
+            logger.error(f"AI Embeddings 异常: {e}")
+            raise
+
+    def health_check(self) -> tuple[bool, str]:
+        """检测后端是否可用。
+
+        Returns:
+            (可用状态, 描述信息)
+        """
+        try:
+            resp = self.client.get(
+                f"{self.base_url}/models",
+                timeout=5.0,
+            )
+            if resp.status_code == 200:
+                return True, "连接正常"
+            return False, f"HTTP {resp.status_code}"
+        except Exception as e:
+            return False, str(e)[:100]
+
     def stream_to_complete(self, messages: list[dict],
                            on_chunk=None,  # callable(content_delta: str)
                            **kwargs) -> AIResult:
