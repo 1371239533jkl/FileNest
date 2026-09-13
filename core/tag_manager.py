@@ -10,8 +10,9 @@ from utils.logger import logger
 class TagManager:
     """文件标签管理器"""
 
-    def __init__(self):
-        self.tag_dao = TagDAO(db)
+    def __init__(self, db_manager=None):
+        # 支持注入独立库（测试用），默认走全局单例
+        self.tag_dao = TagDAO(db_manager) if db_manager is not None else TagDAO(db)
 
     def _resolve(self, tag_name: str) -> str:
         """P1-10: 别名 → 规范名（打标签/建标签时自动归一，非别名原样返回）"""

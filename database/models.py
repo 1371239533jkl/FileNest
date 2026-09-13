@@ -315,7 +315,7 @@ class FileDAO:
         """
         normalized = (dir_path or '').replace('\\', '/').rstrip('/')
         rows = self.db.execute_query(
-            "SELECT file_name, file_type, file_size, is_duplicate, modify_time "
+            "SELECT file_path, file_name, file_type, file_size, is_duplicate, modify_time "
             "FROM files WHERE status = 'active'") or []
         files = []
         for r in rows:
@@ -1012,14 +1012,14 @@ class TagDAO:
             "UPDATE tags SET color = ? WHERE tag_name = ?", (color, tag_name))
 
     def add_alias(self, alias: str, canonical: str) -> bool:
-        """登记别名：alias 是 canonical 的同义词。alias 冲突时返回 False。"""
-        try:
-            self.db.execute_insert(
-                "INSERT OR IGNORE INTO tag_aliases (alias, canonical, create_time) "
-                "VALUES (?, ?, ?)", (alias.strip(), canonical.strip(), datetime.now()))
-            return True
-        except Exception:
+        """登记别名：alias 是 canonical 的同义词。alias 已被占用时返回 False。"""
+        alias, canonical = alias.strip(), canonical.strip()
+        if self.db.execute_one("SELECT 1 FROM tag_aliases WHERE alias = ?", (alias,)):
             return False
+        self.db.execute_insert(
+            "INSERT INTO tag_aliases (alias, canonical, create_time) VALUES (?, ?, ?)",
+            (alias, canonical, datetime.now()))
+        return True
 
     def resolve_alias(self, alias: str) -> str:
         """别名 → 规范名；非别名原样返回。"""

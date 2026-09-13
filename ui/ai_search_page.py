@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 
 from core.ai_layer import AILayer
+from core.embedding_service import EmbeddingService
 from database.db_manager import db
 from database.models import FileDAO
 from utils.display_utils import format_size
@@ -91,9 +92,11 @@ class AiSearchPage(QWidget):
         super().__init__(parent)
         self._theme = theme
         self.ai_layer = AILayer()
+        self.embedding_service = EmbeddingService(self.ai_layer)
         self.file_dao = FileDAO(db)
         self._worker = None
         self._qa_worker = None
+        self._semantic_mode = False
         self._current_summary = ""
         self._current_query = ""
         self._last_files = []
@@ -142,6 +145,15 @@ class AiSearchPage(QWidget):
         self.search_input.setFixedHeight(40)
         self.search_input.returnPressed.connect(self._start_search)
         search_layout.addWidget(self.search_input, 1)
+
+        self.semantic_btn = QPushButton("🧠 语义")
+        self.semantic_btn.setObjectName("aiSemanticBtn")
+        self.semantic_btn.setFixedHeight(40)
+        self.semantic_btn.setFixedWidth(60)
+        self.semantic_btn.setCheckable(True)
+        self.semantic_btn.setToolTip("语义搜索：按内容含义匹配，需 AI 可用")
+        self.semantic_btn.clicked.connect(self._toggle_semantic)
+        search_layout.addWidget(self.semantic_btn)
 
         self.search_btn = QPushButton("🔍 搜索")
         self.search_btn.setObjectName("aiSearchSubmitBtn")
@@ -227,6 +239,16 @@ class AiSearchPage(QWidget):
                 font-size: 12pt;
             }}
             QLineEdit#aiSearchInput:focus {{ border: 1px solid {accent}; }}
+            QPushButton#aiSemanticBtn {{
+                background: {surface}; color: {text};
+                border: 1px solid {border}; border-radius: 8px;
+                font-size: 10pt;
+            }}
+            QPushButton#aiSemanticBtn:checked {{
+                background: {accent}; color: #1e1e2e;
+                border: 1px solid {accent};
+                font-weight: bold;
+            }}
             QPushButton#aiSearchSubmitBtn {{
                 background: {accent}; color: #1e1e2e;
                 border: none; border-radius: 8px;
@@ -267,6 +289,18 @@ class AiSearchPage(QWidget):
 
     # ── 搜索 ──
 
+    def _toggle_semantic(self, checked: bool):
+        """切换语义搜索模式。"""
+        self._semantic_mode = checked
+        if checked:
+            self.search_input.setPlaceholderText(
+                "用自然语言描述文件内容，如：关于项目管理的文档..."
+            )
+        else:
+            self.search_input.setPlaceholderText(
+                "描述你想找的文件，如：大于 100MB 的图片、上周的 PDF 文档..."
+            )
+
     def _start_search(self):
         query = self.search_input.text().strip()
         if not query or not self.ai_layer.enabled:
@@ -281,18 +315,67 @@ class AiSearchPage(QWidget):
         self._add_bubble(query, "user")
 
         # 添加加载提示
-        self._add_bubble("🤖 AI 正在分析搜索结果...", "ai")
+        if self._semantic_mode:
+            self._add_bubble("🧠 正在进行语义搜索...", "ai")
+        else:
+            self._add_bubble("🤖 AI 正在分析搜索结果...", "ai")
         self._scroll_to_bottom()
 
         self.search_btn.setEnabled(False)
         self.search_btn.setText("搜索中...")
+        self.semantic_btn.setEnabled(False)
 
-        self._worker = _AiWorker(
-            self._ai_search_and_summarize, query, parent=self
-        )
+        if self._semantic_mode:
+            self._worker = _AiWorker(
+                self._semantic_search, query, parent=self
+            )
+        else:
+            self._worker = _AiWorker(
+                self._ai_search_and_summarize, query, parent=self
+            )
         self._worker.done.connect(self._on_search_done)
         self._worker.error.connect(self._on_search_error)
         self._worker.start()
+
+    def _semantic_search(self, query: str):
+        """后台：语义搜索 + 生成摘要。"""
+        # 1. 语义搜索
+        results = self.embedding_service.search(query, top_k=30)
+        if not results:
+            return {
+                "params": {"query": query},
+                "source": "semantic",
+                "total": 0,
+                "files": [],
+                "summary": "未找到语义匹配的文件。可能原因：\n• 尚未为文件生成 embedding 向量\n• 查询内容与现有文件差异较大\n\n提示：可以先在设置中为文件生成向量索引。",
+            }
+
+        # 2. 按 file_id 查文件详情
+        file_ids = [fid for fid, _ in results]
+        files = self.file_dao.get_by_ids(file_ids)
+
+        # 按相似度排序（get_by_ids 可能打乱顺序）
+        id_to_score = {fid: score for fid, score in results}
+        id_to_file = {f.id: f for f in files}
+        sorted_files = [id_to_file[fid] for fid in file_ids if fid in id_to_file]
+
+        total = len(sorted_files)
+        self._last_files = sorted_files
+        self._last_total = total
+
+        # 3. AI 生成摘要
+        summary = self.ai_layer.summarize_results(query, sorted_files[:10], total)
+        if not summary:
+            top_score = results[0][1] if results else 0
+            summary = f"找到 {total} 个语义相关的文件（最高相似度 {top_score:.2f}）。"
+
+        return {
+            "params": {"query": query, "semantic": True},
+            "source": "semantic",
+            "total": total,
+            "files": sorted_files,
+            "summary": summary,
+        }
 
     def _ai_search_and_summarize(self, query: str):
         """后台：AI 解析 + 执行搜索 + 生成摘要"""
@@ -322,6 +405,7 @@ class AiSearchPage(QWidget):
     def _on_search_done(self, result):
         self.search_btn.setEnabled(True)
         self.search_btn.setText("🔍 搜索")
+        self.semantic_btn.setEnabled(True)
 
         # 移除 loading 气泡（最后一个）
         if self.chat_layout.count() > 1:
@@ -369,6 +453,7 @@ class AiSearchPage(QWidget):
     def _on_search_error(self, err: str):
         self.search_btn.setEnabled(True)
         self.search_btn.setText("🔍 搜索")
+        self.semantic_btn.setEnabled(True)
 
         # 移除 loading 气泡
         if self.chat_layout.count() > 1:

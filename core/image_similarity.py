@@ -19,7 +19,7 @@ def dhash(path: str, hash_size: int = 8) -> Optional[str]:
         from PIL import Image
         with Image.open(path) as img:
             gray = img.convert('L').resize((hash_size + 1, hash_size))
-            px = list(gray.getdata())
+            px = gray.tobytes()  # L 模式每字节一个灰度值
         bits = 0
         for row in range(hash_size):
             for col in range(hash_size):
@@ -58,7 +58,7 @@ class SimilarityManager:
         rows = self._db.execute_query(
             "SELECT id, file_path FROM files "
             "WHERE file_type = 'image' AND status = 'active' "
-            + ("AND perceptual_hash IS NOT NULL" if not reset else "")
+            + ("" if reset else "AND perceptual_hash IS NULL")
         ) or []
         total = len(rows)
         for i, r in enumerate(rows):
@@ -115,8 +115,10 @@ class SimilarityManager:
         for members in groups.values():
             if len(members) < min_group:
                 continue
-            hashes = {m.get('file_hash') for m in members if m.get('file_hash')}
-            label = '完全重复' if not hashes or len(hashes) == 1 else '视觉相似'
+            hashes = {m.get('file_hash') for m in members}
+            label = ('完全重复'
+                     if hashes and None not in hashes and len(hashes) == 1
+                     else '视觉相似')
             result.append({'label': label, 'files': members})
         result.sort(key=lambda g: -len(g['files']))
         return result

@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
     QCheckBox, QMessageBox, QFileDialog,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
-from PyQt6.QtGui import QTextCursor
+from PyQt6.QtGui import QPainter, QPen, QColor
 
 from core.ai_layer import AILayer
 from core.ai_chat import AiConversation
@@ -200,16 +200,24 @@ class _ChatBubble(QFrame):
         self._text_browser = QTextBrowser()
         self._text_browser.setObjectName(f"bubbleText_{self._role}")
         self._text_browser.setOpenExternalLinks(True)
+        # P1-02 引用溯源：cite://N 锚点由气泡自己处理（http 外链仍由 Qt 打开浏览器）
+        self._text_browser.anchorClicked.connect(self._on_anchor_clicked)
+        self._citations: list[dict] = []   # P1-02: 本条回答的引用来源
+        self._citation_opener = None       # P1-02: 点击来源的回调
+        self._cite_chips: list = []        # P1-02: 主题热刷新跟踪
         self._text_browser.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._text_browser.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._text_browser.setFrameShape(QFrame.Shape.NoFrame)
         self._text_browser.document().setDocumentMargin(0)
         self._layout.addWidget(self._text_browser)
 
-        # [MODULE-A] 流式渲染跟踪：限制 setHtml() 调用频率
+        # [MODULE-A] 流式渲染跟踪：QTimer 合帧刷新（~16fps），与 chunk 到达频率解耦
         self._accumulated_raw = ""     # 累积原始文本
-        self._last_flush_pos = 0       # 上次刷新时的字符位置
-        self._min_flush_chars = 20     # 最少新增字符数才刷新
+        self._streaming = False        # 流式进行中（控制打字光标）
+        self._stream_timer = QTimer(self)
+        self._stream_timer.setSingleShot(True)
+        self._stream_timer.setInterval(60)
+        self._stream_timer.timeout.connect(self._flush_stream)
 
         # [MODULE-B] 右键菜单：复制全部文本
         self._text_browser.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -227,46 +235,44 @@ class _ChatBubble(QFrame):
 
         self._apply_theme(True)
 
-    def set_text(self, text: str):
-        """设置文本内容（支持 Markdown 代码块渲染）—— [MODULE-A] 重置跟踪"""
+    def set_text(self, text: str, streaming: bool = False):
+        """设置文本内容（支持 Markdown 渲染）—— streaming=True 时带打字光标"""
         self._accumulated_raw = text
-        self._last_flush_pos = len(text)
-        html_text = self._render_markdown(text)
-        self._text_browser.setHtml(html_text)
-        self._adjust_size()
+        self._streaming = streaming
+        self._stream_timer.stop()
+        self._flush_stream()
 
     def append_text(self, text: str):
-        """[MODULE-A] 流式文本追加 —— 限频刷新 + 代码块感知，避免 O(n²) 卡顿
+        """[MODULE-A] 流式追加 —— 只累积，由 QTimer 合帧后统一渲染
 
-        策略：
-        1. 累积到 _accumulated_raw，不每 chunk 都调用 setHtml()
-        2. 代码块未闭合（``` 奇数个）时暂不刷新，等闭合后一起渲染
-        3. 非代码块区域每攒够 _min_flush_chars 个新字符才刷新一次 UI
+        刷新频率固定 ~16fps，与 token 到达速率解耦：高频 chunk 不卡顿，
+        慢速流式也不会长时间无更新（旧实现按 20 字符跳变，观感差）。
         """
         self._accumulated_raw += text
+        self._streaming = True
+        if not self._stream_timer.isActive():
+            self._stream_timer.start()
 
-        # 代码块未闭合 → 暂不刷新，等闭合后一次性渲染
-        if self._accumulated_raw.count('```') % 2 != 0:
-            return
-
-        # 限制刷新频率：距离上次刷新不足阈值则跳过
-        new_chars = len(self._accumulated_raw) - self._last_flush_pos
-        if new_chars < self._min_flush_chars:
-            return
-
-        self._last_flush_pos = len(self._accumulated_raw)
-        html_text = self._render_markdown(self._accumulated_raw)
-        self._text_browser.setHtml(html_text)
-        # 保持滚动在底部
-        cursor = self._text_browser.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        self._text_browser.setTextCursor(cursor)
+    def _flush_stream(self):
+        """合帧渲染当前累积文本（QTimer 回调）"""
+        raw = self._accumulated_raw
+        # 代码块未闭合 → 补闭合符渐进渲染，避免长代码期间画面冻结
+        if raw.count('```') % 2 != 0:
+            raw += '\n```'
+        html = self._render_markdown(raw)
+        if self._streaming:
+            accent = "#89b4fa" if self._is_dark else "#1e66f5"
+            caret = f'<span style="color:{accent};font-weight:700;">▌</span>'
+            if html.endswith('</div>'):
+                html = html[:-6] + caret + '</div>'
+        self._text_browser.setHtml(html)
         self._adjust_size()
 
     def _on_text_context_menu(self, pos):
         """[MODULE-B] 右键菜单：复制全部文本"""
         from PyQt6.QtWidgets import QMenu, QApplication
         menu = QMenu(self)
+        menu.setStyleSheet(_theme_menu_qss(self._is_dark))
         copy_all = menu.addAction("📋 复制全部文本")
         action = menu.exec(self._text_browser.mapToGlobal(pos))
         if action == copy_all:
@@ -304,6 +310,105 @@ class _ChatBubble(QFrame):
         )
         btn.clicked.connect(callback)
         self._layout.addWidget(btn)
+
+    def set_citations(self, citations: list, opener):
+        """P1-02 引用溯源：在气泡底部渲染"📎 来源"chip 行
+
+        citations: [{"file_id": int|None, "file_name": str,
+                     "file_path": str, "snippet": str|None}, ...]
+        opener: 点击 chip 时的回调，接收 cite dict。
+        """
+        from PyQt6.QtWidgets import QHBoxLayout
+
+        self._citations = list(citations or [])
+        self._citation_opener = opener
+        if not self._citations:
+            return
+
+        row = QFrame()
+        row.setObjectName("citeRow")
+        h = QHBoxLayout(row)
+        h.setContentsMargins(2, 2, 2, 2)
+        h.setSpacing(6)
+
+        title = QLabel("📎 来源")
+        title.setStyleSheet("border: none; background: transparent;")
+        h.addWidget(title)
+        self._cite_title = title
+
+        for cite in self._citations:
+            name = cite.get("file_name") or os.path.basename(
+                cite.get("file_path", "")) or "未知文件"
+            if len(name) > 22:
+                name = name[:21] + "…"
+            chip = QPushButton(f"📄 {name}")
+            chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            tip = cite.get("file_path", "")
+            snip = cite.get("snippet")
+            if snip:
+                tip += f"\n\n摘录: {snip[:120]}"
+            tip += "\n\n点击打开该文件"
+            chip.setToolTip(tip)
+            chip.clicked.connect(
+                lambda _checked=False, c=cite: self._citation_opener and self._citation_opener(c)
+            )
+            h.addWidget(chip)
+            self._cite_chips.append((chip, title))
+
+        h.addStretch()
+        self._layout.addWidget(row)
+        self._style_citation_chips()
+        self._adjust_size()
+
+    def _style_citation_chips(self):
+        """P1-02: 引用 chip / 标题主题样式（切主题热刷新）"""
+        is_dark = self._is_dark
+        chip_border = "#45475a" if is_dark else "#bcc0cc"
+        chip_text = "#a6adc8" if is_dark else "#6c6f85"
+        accent = "#89b4fa" if is_dark else "#8839ef"
+        for chip, title in self._cite_chips:
+            chip.setStyleSheet(
+                f"QPushButton {{"
+                f"  background: transparent; color: {chip_text};"
+                f"  border: 1px solid {chip_border}; border-radius: 10px;"
+                f"  padding: 3px 10px; font-size: 9pt;"
+                f"}}"
+                f"QPushButton:hover {{"
+                f"  color: {accent}; border-color: {accent};"
+                f"}}"
+            )
+            title.setStyleSheet(
+                f"font-size: 9pt; color: {chip_text};"
+                f" border: none; background: transparent;"
+            )
+
+    def show_no_evidence_hint(self):
+        """P1-02 无证据兜底：正文引用了 [来源 N] 但工具层未收集到任何文件证据"""
+        hint = QLabel(
+            "⚠️ 本回答中的 [来源] 编号未匹配到可追溯的文件证据，相关结论请人工核实"
+        )
+        hint.setWordWrap(True)
+        is_dark = self._is_dark
+        hint.setStyleSheet(
+            f"font-size: 9pt; color: {'#f9e2af' if is_dark else '#df8e1d'};"
+            " border: none; background: transparent;"
+        )
+        self._layout.addWidget(hint)
+        self._adjust_size()
+
+    def _on_anchor_clicked(self, url):
+        """P1-02: 点击正文中的 [来源 N] 锚点 → 打开对应来源文件"""
+        if self._citation_opener is None or not self._citations:
+            return
+        s = url.toString()
+        if not s.startswith("cite://"):
+            return
+        try:
+            idx = int(s[len("cite://"):]) - 1
+        except ValueError:
+            return
+        if 0 <= idx < len(self._citations):
+            self._citation_opener(self._citations[idx])
 
     def add_tool_card(self, tool_name: str, result_summary: str,
                       action_text: str = None, action_callback=None,
@@ -476,7 +581,14 @@ class _ChatBubble(QFrame):
                     f'<pre style="margin:0;"><code>{html.escape(code)}</code></pre></div>'
                 )
 
-        result = re.sub(r'```(\w+)?\n(.*?)```', _highlight_code, escaped, flags=re.DOTALL)
+        # 代码块先暂存为占位符，避免块级解析误伤代码内容
+        stash: list[str] = []
+
+        def _stash_code(match):
+            stash.append(_highlight_code(match))
+            return f"\x00CB{len(stash) - 1}\x00"
+
+        result = re.sub(r'```(\w+)?\n(.*?)```', _stash_code, escaped, flags=re.DOTALL)
 
         # 处理行内代码 `code`
         result = re.sub(
@@ -496,8 +608,129 @@ class _ChatBubble(QFrame):
             result
         )
 
-        # 换行
-        result = result.replace("\n", "<br>")
+        # P1-02 引用溯源：正文中的 [来源 N] → 可点击锚点（cite://N → 对应来源文件）
+        result = re.sub(
+            r'\[(?:来源|Source)\s*(\d+)\]',
+            rf'<a href="cite://\1" style="color:{link_color};text-decoration:none;">[\1]</a>',
+            result
+        )
+
+        # 块级元素（标题/列表/表格/分隔线/引用）—— 对齐主流 AI 渲染
+        accent = link_color
+
+        def _td(cells, is_head=False):
+            tag = "th" if is_head else "td"
+            bg = f"background:{inline_bg};" if is_head else ""
+            weight = "font-weight:700;" if is_head else ""
+            return "".join(
+                f'<{tag} style="{bg}{weight}padding:5px 10px;">{c}</{tag}>'
+                for c in cells
+            )
+
+        lines = result.split("\n")
+        out: list[str] = []
+        i, n = 0, len(lines)
+        while i < n:
+            s = lines[i].strip()
+
+            # 表格：| a | b | + 分隔行 |---|---|
+            if s.startswith("|") and s.endswith("|") and i + 1 < n \
+                    and re.match(r'^\|[\s:\-|]+\|$', lines[i + 1].strip()):
+                header = [c.strip() for c in s.strip("|").split("|")]
+                rows = []
+                j = i + 2
+                while j < n and lines[j].strip().startswith("|") and lines[j].strip().endswith("|"):
+                    rows.append([c.strip() for c in lines[j].strip().strip("|").split("|")])
+                    j += 1
+                body = f'<tr>{_td(header, True)}</tr>' + "".join(f'<tr>{_td(r)}</tr>' for r in rows)
+                out.append(
+                    f'<table border="1" cellspacing="0" cellpadding="0" '
+                    f'style="border-collapse:collapse;margin:6px 0;font-size:9.5pt;">{body}</table>'
+                )
+                i = j
+                continue
+
+            # 标题 # ~ ######
+            m = re.match(r'^(#{1,6})\s+(.+)$', s)
+            if m:
+                size = {1: "14pt", 2: "13pt", 3: "12pt"}.get(len(m.group(1)), "11pt")
+                out.append(
+                    f'<div style="font-size:{size};font-weight:700;color:{accent};margin-top:6px;">{m.group(2)}</div>'
+                )
+                i += 1
+                continue
+
+            # 分隔线 ---
+            if re.match(r'^(-{3,}|\*{3,}|_{3,})$', s):
+                out.append(f'<div style="border-top:1px solid {code_border};margin:8px 0;font-size:1px;">&nbsp;</div>')
+                i += 1
+                continue
+
+            # 无序列表（连续行合并）
+            if re.match(r'^[-*]\s+', s):
+                items = []
+                while i < n and re.match(r'^[-*]\s+', lines[i].strip()):
+                    txt = re.sub(r'^[-*]\s+', '', lines[i].strip())
+                    items.append(f'<li>{txt}</li>')
+                    i += 1
+                out.append(f'<ul style="margin-top:2px;margin-bottom:2px;">{"".join(items)}</ul>')
+                continue
+
+            # 有序列表（连续行合并）
+            if re.match(r'^\d+\.\s+', s):
+                items = []
+                while i < n and re.match(r'^\d+\.\s+', lines[i].strip()):
+                    txt = re.sub(r'^\d+\.\s+', '', lines[i].strip())
+                    items.append(f'<li>{txt}</li>')
+                    i += 1
+                out.append(f'<ol style="margin-top:2px;margin-bottom:2px;">{"".join(items)}</ol>')
+                continue
+
+            # 引用 >
+            if s.startswith("&gt;"):
+                quote = []
+                while i < n and lines[i].strip().startswith("&gt;"):
+                    quote.append(re.sub(r'^&gt;\s?', '', lines[i].strip()))
+                    i += 1
+                out.append(
+                    f'<div style="border-left:3px solid {accent};padding:2px 0 2px 10px;'
+                    f'color:{tool_text};margin:6px 0;">{"<br>".join(quote)}</div>'
+                )
+                continue
+
+            out.append(lines[i])
+            i += 1
+
+        # 空行治理 + 拼接：块级元素（自带外边距）与相邻内容之间不插 <br>，
+        # 与块级相邻的空行丢弃，连续空行折叠为一个段落间隔
+        def _is_block(item):
+            return item.startswith(("<ul", "<ol", "<table", "<div", "\x00CB"))
+
+        parts: list[str] = []
+        for idx, item in enumerate(out):
+            if item.strip() == "":
+                nxt = next((x for x in out[idx + 1:] if x.strip() != ""), None)
+                if not parts or _is_block(parts[-1]) or nxt is None or _is_block(nxt):
+                    continue  # 开头/结尾/块级相邻的空行
+                if parts[-1] == "":
+                    continue  # 连续空行折叠
+                parts.append("")
+                continue
+            if parts:
+                if _is_block(parts[-1]) or _is_block(item):
+                    parts.append(item)
+                else:
+                    parts.extend(("<br>", item))
+            else:
+                parts.append(item)
+        result = "".join(parts)
+
+        # 模型在表格/列表单元格内用 <br> 换行（Markdown 表格不支持真实换行符），
+        # 转义后会显示为字面量，这里还原为真换行（代码块已 stash，不受影响）
+        result = re.sub(r'&lt;br\s*/?&gt;', '<br>', result)
+
+        # 还原代码块
+        result = re.sub(r'\x00CB(\d+)\x00', lambda m: stash[int(m.group(1))], result)
 
         return f'<div style="font-size:10pt;line-height:1.6;">{result}</div>'
 
@@ -510,13 +743,30 @@ class _ChatBubble(QFrame):
             vp_w = self._content_frame.parent().width() - 80
         if vp_w <= 0:
             vp_w = 400
+        # 气泡框架最大 700（含内边距）：按更宽容器测量会低估行数 → 末行被裁剪
+        vp_w = min(vp_w, 660)
         doc.setTextWidth(vp_w)
         doc_height = doc.size().height()
         # 保证至少 20px 高度
-        self._text_browser.setFixedHeight(max(int(doc_height + 10), 20))
+        self._text_browser.setFixedHeight(max(int(doc_height + 12), 20))
         # 强制内容框架也更新
         self._content_frame.updateGeometry()
         self._content_frame.setMaximumWidth(700)
+        # 布局稳定后再量一次（首条消息时 viewport 宽度可能尚未就绪）
+        QTimer.singleShot(0, self._adjust_size_after_layout)
+
+    def _adjust_size_after_layout(self):
+        """布局后的二次校准：viewport 宽度变化时重测高度"""
+        doc = self._text_browser.document()
+        vp_w = self._text_browser.viewport().width()
+        if vp_w <= 0:
+            return
+        vp_w = min(vp_w, 660)
+        if doc.textWidth() != vp_w:
+            doc.setTextWidth(vp_w)
+        real_h = int(doc.size().height() + 12)
+        if abs(self._text_browser.height() - real_h) > 4:
+            self._text_browser.setFixedHeight(max(real_h, 20))
 
     def _apply_theme(self, is_dark: bool):
         self._is_dark = is_dark
@@ -566,6 +816,113 @@ class _ChatBubble(QFrame):
                 f"}}"
             )
 
+        # P1-02: 刷新引用 chip 样式
+        if self._cite_chips:
+            self._style_citation_chips()
+
+        # 主题切换后重渲染 Markdown HTML —— 代码块/表格/标题等颜色是渲染时
+        # 烘焙进 HTML 的，只改 QSS 会导致切主题后残留旧主题配色
+        if getattr(self, "_accumulated_raw", ""):
+            self._flush_stream()
+
+
+class _SemanticWorker(QThread):
+    """🧠 语义检索后台线程：查询向量库，返回与问题语义最相关的文件"""
+
+    done = pyqtSignal(list)   # [{file_name, file_path, score}, ...]
+    error = pyqtSignal(str)
+
+    def __init__(self, query: str, parent=None):
+        super().__init__(parent)
+        self._query = query
+
+    def run(self):
+        try:
+            from PyQt6.QtCore import QSettings
+            from core.ai_layer import AILayer
+            from core.embedding_service import EmbeddingService
+            from database.db_manager import db
+
+            # 向量模型独立配置（对话模型不支持 /embeddings）
+            model = (QSettings("smart-file-manager", "ai")
+                     .value("embed_model", "", str) or "").strip() or None
+            svc = EmbeddingService(AILayer(), embed_model=model)
+            if svc.count_embedded() == 0:
+                self.done.emit([])
+                return
+            results = svc.search(self._query, top_k=8)
+            if not results:
+                self.done.emit([])
+                return
+            ids = [fid for fid, _ in results]
+            scores = {fid: s for fid, s in results}
+            placeholders = ",".join("?" * len(ids))
+            rows = db.execute_query(
+                f"SELECT id, file_name, file_path FROM files "
+                f"WHERE id IN ({placeholders}) AND status = 'active'",
+                ids,
+            ) or []
+            files = [
+                {
+                    "file_id": r["id"],
+                    "file_name": r["file_name"],
+                    "file_path": r["file_path"],
+                    "score": scores.get(r["id"], 0.0),
+                }
+                for r in rows
+            ]
+            files.sort(key=lambda f: f["score"], reverse=True)
+            self.done.emit(files)
+        except Exception as e:
+            logger.error(f"语义检索线程失败: {e}")
+            self.error.emit(str(e))
+
+
+def _theme_menu_qss(is_dark: bool) -> str:
+    """右键弹出菜单的主题化样式（QMenu 弹窗不继承页面 QSS，需单独设置）"""
+    bg = "#1e1e2e" if is_dark else "#ffffff"
+    fg = "#cdd6f4" if is_dark else "#4c4f69"
+    border = "#45475a" if is_dark else "#bcc0cc"
+    hl = "rgba(137, 180, 250, 0.18)" if is_dark else "rgba(136, 57, 239, 0.12)"
+    return (
+        f"QMenu {{ background: {bg}; color: {fg}; border: 1px solid {border};"
+        f" border-radius: 8px; padding: 4px; }}"
+        f"QMenu::item {{ padding: 6px 18px; border-radius: 6px; margin: 1px 2px; }}"
+        f"QMenu::item:selected {{ background: {hl}; }}"
+        f"QMenu::separator {{ height: 1px; background: {border}; margin: 4px 8px; }}"
+    )
+
+
+class _ContextRing(QWidget):
+    """主流 AI 风格的上下文用量圆环（替代进度条）"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(16, 16)
+        self._pct = 0
+        self._color = QColor("#a6e3a1")
+        self._track = QColor("#45475a")
+
+    def set_usage(self, pct: int, color: str, track: str):
+        self._pct = max(0, min(pct, 100))
+        self._color = QColor(color)
+        self._track = QColor(track)
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect().adjusted(2, 2, -2, -2)
+        pen = QPen(self._track, 2.5)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.drawEllipse(rect)
+        if self._pct > 0:
+            pen.setColor(self._color)
+            p.setPen(pen)
+            # Qt 角度单位为 1/16 度：90*16 从顶部起，负跨度为顺时针
+            p.drawArc(rect, 90 * 16, int(-3.6 * 16 * self._pct))
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 主页面
@@ -577,6 +934,8 @@ class AiChatPage(QWidget):
     go_back = pyqtSignal()
     show_results = pyqtSignal(dict)  # 兼容旧接口
     navigate_to_search = pyqtSignal(dict)  # 跳转到搜索 Tab 并填入参数
+    # P1-02 引用溯源：请求主窗口打开某个来源文件 (file_path, file_id|None)
+    open_file_request = pyqtSignal(str, object)
 
     def __init__(self, parent=None, theme: str = "dark"):
         super().__init__(parent)
@@ -594,6 +953,8 @@ class AiChatPage(QWidget):
         self._current_streaming_bubble: Optional[_ChatBubble] = None
         self._streaming_content_accumulated = False  # P1-1: 跟踪当前轮是否已收到过文本
         self._all_sessions = []  # P2-2: 缓存全部会话用于搜索过滤
+        self._current_citations: list[dict] = []  # P1-02: 本轮回答的引用来源
+        self._pending_semantic_sources: list[dict] = []  # P1-02: 待注入的语义检索来源
 
         self._init_ui()
         self._refresh_sessions()
@@ -681,6 +1042,8 @@ class AiChatPage(QWidget):
         self._scroll_area.setWidgetResizable(True)
         self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self._follow_bottom = True  # 用户向上回看时暂停自动滚底
+        self._scroll_area.verticalScrollBar().valueChanged.connect(self._on_scroll_moved)
         self._scroll_area.setObjectName("aiChatScroll")
 
         self._chat_widget = QWidget()
@@ -692,32 +1055,7 @@ class AiChatPage(QWidget):
         self._scroll_area.setWidget(self._chat_widget)
         chat_layout.addWidget(self._scroll_area)
 
-        # [MODULE-B] 上下文使用率指示器
-        self._context_bar = QWidget()
-        self._context_bar.setObjectName("aiContextBar")
-        self._context_bar.setFixedHeight(22)
-        ctx_layout = QHBoxLayout(self._context_bar)
-        ctx_layout.setContentsMargins(16, 1, 16, 1)
-        ctx_layout.setSpacing(8)
-
-        self._ctx_label = QLabel("上下文: --")
-        self._ctx_label.setStyleSheet(
-            "font-size: 9pt; color: #a6adc8; border: none; background: transparent;"
-        )
-        ctx_layout.addWidget(self._ctx_label)
-
-        from PyQt6.QtWidgets import QProgressBar
-        self._ctx_progress = QProgressBar()
-        self._ctx_progress.setTextVisible(False)
-        self._ctx_progress.setFixedHeight(5)
-        self._ctx_progress.setMaximum(100)
-        self._ctx_progress.setValue(0)
-        self._ctx_progress.setStyleSheet(
-            "QProgressBar { background: #313244; border: none; border-radius: 2px; }"
-            "QProgressBar::chunk { background: #a6e3a1; border-radius: 2px; }"
-        )
-        ctx_layout.addWidget(self._ctx_progress, 1)
-        chat_layout.addWidget(self._context_bar)
+        # [MODULE-B] 上下文圆环已集成到输入栏 chip 行（见 _init_input_bar）
 
         # P2-4: 请求超时进度提示标签
         self._progress_label = QLabel()
@@ -745,26 +1083,7 @@ class AiChatPage(QWidget):
         side_layout.setContentsMargins(12, 12, 12, 12)
         side_layout.setSpacing(12)
 
-        # 工具开关
-        tools_header = QLabel("⚡ 能力开关")
-        tools_header.setStyleSheet("font-weight: bold; font-size: 11pt; border: none; background: transparent;")
-        side_layout.addWidget(tools_header)
-
-        self._tool_checks = {}
-        tools_info = [
-            ("search_files", "📂 文件搜索", True),
-            ("search_content", "📝 正文检索（含来源）", True),
-            ("search_web", "🌐 联网搜索", True),
-            ("read_file", "📄 读取文件", True),
-        ]
-        for tool_id, label, default in tools_info:
-            cb = QCheckBox(label)
-            cb.setObjectName(f"toolCheck_{tool_id}")
-            cb.setChecked(default)
-            cb.setCursor(Qt.CursorShape.PointingHandCursor)
-            cb.stateChanged.connect(self._on_tool_toggle_changed)
-            self._tool_checks[tool_id] = cb
-            side_layout.addWidget(cb)
+        # 能力开关已集成到输入栏（工具胶囊 chips，见 _init_input_bar）
 
         side_layout.addSpacing(8)
 
@@ -802,23 +1121,76 @@ class AiChatPage(QWidget):
 
         side_layout.addStretch()
 
+    # 输入栏工具胶囊（能力开关集成到输入框上方，主流 AI 风格）
+    _TOOL_CHIPS = [
+        ("search_files", "📂 文件", "文件搜索"),
+        ("search_content", "📝 正文", "正文检索（含来源）"),
+        ("search_web", "🌐 联网", "联网搜索"),
+        ("read_file", "📄 读取", "读取文件"),
+        ("semantic", "🧠 语义", "语义搜索：按内容含义检索相关文件注入上下文（需先生成向量索引）"),
+    ]
+
     def _init_input_bar(self):
         self._input_bar = QFrame()
         self._input_bar.setObjectName("aiChatInputBar")
-        input_layout = QHBoxLayout(self._input_bar)
-        input_layout.setContentsMargins(16, 10, 16, 10)
+        outer_layout = QVBoxLayout(self._input_bar)
+        outer_layout.setContentsMargins(16, 8, 16, 10)
+        outer_layout.setSpacing(6)
+
+        # 工具胶囊行：可点选的能力开关（激活=主题色描边，未激活=灰色描边）
+        chip_row = QHBoxLayout()
+        chip_row.setSpacing(6)
+        self._tool_checks = {}
+        for tool_id, label, tip in self._TOOL_CHIPS:
+            chip = QPushButton(label)
+            chip.setObjectName(f"toolChip_{tool_id}")
+            chip.setCheckable(True)
+            # 语义默认关闭：需先生成向量索引才有意义
+            chip.setChecked(tool_id != "semantic")
+            chip.setFixedHeight(26)
+            chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            chip.setToolTip(tip)
+            chip.clicked.connect(self._on_tool_toggle_changed)
+            self._tool_checks[tool_id] = chip
+            chip_row.addWidget(chip)
+        chip_row.addStretch()
+
+        # 上下文用量圆环（集成到输入栏，chip 行右端，主流 AI 风格）
+        self._ctx_ring = _ContextRing()
+        chip_row.addWidget(self._ctx_ring)
+
+        outer_layout.addLayout(chip_row)
+
+        # 输入行
+        input_layout = QHBoxLayout()
+        input_layout.setContentsMargins(0, 0, 0, 0)
         input_layout.setSpacing(10)
 
-        # 输入框（支持多行）
+        # 输入框（支持多行；Enter 发送，Shift+Enter 换行）
         from PyQt6.QtWidgets import QTextEdit
-        self._msg_input = QTextEdit()
+
+        class _EnterTextEdit(QTextEdit):
+            """Enter 发送、Shift+Enter 换行的多行输入框"""
+
+            def __init__(self, on_send):
+                super().__init__()
+                self._on_send = on_send
+
+            def keyPressEvent(self, event):
+                if (event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+                        and not event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
+                    self._on_send()
+                    return
+                super().keyPressEvent(event)
+
+        self._msg_input = _EnterTextEdit(self._send_message)
         self._msg_input.setObjectName("aiChatMsgInput")
         self._msg_input.setPlaceholderText("输入你的问题，如：帮我找代码中的数据库连接..."
                                             "\n支持 Shift+Enter 换行，Enter 发送")
-        self._msg_input.setMinimumHeight(56)
         self._msg_input.setAcceptRichText(False)
         self._msg_input.setTabChangesFocus(True)
         self._msg_input.textChanged.connect(self._auto_resize_input)  # [D2]
+        self._auto_resize_input()  # 初始即锁定高度，避免 QTextEdit 默认撑大
         input_layout.addWidget(self._msg_input, 1)
 
         # 发送按钮
@@ -840,8 +1212,7 @@ class AiChatPage(QWidget):
         self._stop_btn.setVisible(False)
         input_layout.addWidget(self._stop_btn)
 
-        # 快捷键：Enter 发送, Shift+Enter 换行
-        # 使用 keyPressEvent 重载处理
+        outer_layout.addLayout(input_layout)
 
     def keyPressEvent(self, event):
         """全局快捷键处理 —— [MODULE-B] 扩展快捷键"""
@@ -1153,6 +1524,7 @@ class AiChatPage(QWidget):
 
         from PyQt6.QtWidgets import QMenu
         menu = QMenu(self)
+        menu.setStyleSheet(_theme_menu_qss(self._is_dark))
         export_action = menu.addAction(f"📥 导出「{session_title}」为 Markdown")
         menu.addSeparator()
         delete_action = menu.addAction(f"🗑 删除「{session_title}」")
@@ -1266,20 +1638,89 @@ class AiChatPage(QWidget):
         self._stop_btn.setVisible(True)
         self._disable_input(True)
 
+        # 🧠 语义模式：先在后台检索语义相关文件，检索完再带着上下文开始对话
+        semantic_chip = self._tool_checks.get("semantic")
+        self._pending_user_text = text
+        if semantic_chip and semantic_chip.isChecked():
+            self._current_streaming_bubble.set_text("🧠 正在检索语义相关文件...")
+            self._semantic_worker = _SemanticWorker(text)
+            self._semantic_worker.done.connect(self._on_semantic_done)
+            self._semantic_worker.error.connect(self._on_semantic_error)
+            self._semantic_worker.start()
+            return
+
+        self._begin_chat()
+
+    def _on_semantic_done(self, files):
+        """语义检索完成：相关文件注入上下文，正式启动对话"""
+        self._pending_semantic_sources = []
+        if files:
+            self._current_streaming_bubble.set_text(
+                f"🧠 找到 {len(files)} 个语义相关文件，正在思考..."
+            )
+            # P1-02: 编号与引用 chip 一一对应（注入 registry 后 search_content 接续编号）
+            cite_lines = [
+                f"- [来源 {i}] {f['file_name']}（{f['file_path']}，相似度 {f['score']:.2f}）"
+                for i, f in enumerate(files, 1)
+            ]
+            note = (
+                "\n\n[语义检索结果] 以下是与用户问题语义最相关的本地文件，"
+                "回答时请在对应结论后标注 [来源 N]（N 为下方来源编号）；"
+                "需要内容细节请用 read_file 工具读取：\n"
+                + "\n".join(cite_lines)
+            )
+            self._pending_semantic_sources = [
+                {
+                    "file_id": f.get("file_id"),
+                    "file_name": f.get("file_name", ""),
+                    "file_path": f.get("file_path", ""),
+                    "snippet": None,
+                }
+                for f in files
+            ]
+        else:
+            note = (
+                "\n\n[语义检索结果] 未检索到语义相关文件"
+                "（可能尚未在 AI 设置中生成向量索引）。"
+            )
+        self._begin_chat(note)
+
+    def _on_semantic_error(self, msg):
+        """语义检索失败：忽略上下文直接对话，不中断用户"""
+        logger.warning(f"语义检索失败，跳过注入: {msg}")
+        self._begin_chat("")
+
+    def _begin_chat(self, semantic_note: str = ""):
+        """启动 AI 对话（原 _send_message 后半段，semantic_note 为注入的检索上下文）"""
         # 确保工具注册表已初始化
         if self._tool_registry is None:
             self._tool_registry = self.ai_layer.tool_registry
 
-        # 添加用户消息到对话
+        # P1-02: 新一轮提问前清空来源收集，防止跨问题串引用
+        self._current_citations = []
+        self._pending_semantic_sources = getattr(self, "_pending_semantic_sources", [])
+        try:
+            self._tool_registry.clear_sources()
+        except AttributeError:
+            pass
+        # P1-02: 注入语义检索命中的来源（在工具调用前，保证 [来源 N] 编号对齐）
+        if self._pending_semantic_sources:
+            try:
+                self._tool_registry.add_sources(self._pending_semantic_sources)
+            except AttributeError:
+                pass
+
+        # 添加用户消息到对话（检索上下文只注入模型输入，用户气泡保持原文）
         if self._conversation is None:
             self._new_conversation()
-        self._conversation.add_user_message(text)
+        self._conversation.add_user_message(self._pending_user_text + semantic_note)
         self._update_context_indicator()  # [MODULE-B]
 
         # 自动生成标题
         if self._conversation.message_count <= 2:
+            title_src = self._pending_user_text
             self._conversation.update_title(
-                text[:25] + ("…" if len(text) > 25 else "")
+                title_src[:25] + ("…" if len(title_src) > 25 else "")
             )
 
         # 启动后台线程
@@ -1300,6 +1741,15 @@ class AiChatPage(QWidget):
     def _stop_generation(self):
         """停止当前生成 —— P1-2: 使用取消标志替代 terminate()"""
         self._stop_progress()  # P2-4
+        # 语义检索阶段停止：断开信号避免迟到回调启动对话
+        sw = getattr(self, "_semantic_worker", None)
+        if sw and sw.isRunning():
+            try:
+                sw.done.disconnect()
+                sw.error.disconnect()
+            except TypeError:
+                pass
+            sw.wait(10000)
         if self._worker and self._worker.isRunning():
             self._worker.cancel()
             # 等待 worker 优雅退出（最多等连接超时时间）
@@ -1307,16 +1757,16 @@ class AiChatPage(QWidget):
         self._on_done("")
 
     def _on_chunk(self, text: str):
-        """收到流式文本 —— P1-1: 真正的逐字增量渲染 + P2-4: 进度提示"""
+        """收到流式文本 —— 合帧渲染 + P2-4: 进度提示"""
         if self._current_streaming_bubble:
             # 每轮工具循环后的第一个文本块替换占位文字，后续追加
             if not self._streaming_content_accumulated:
-                self._current_streaming_bubble.set_text(text)
+                self._current_streaming_bubble.set_text(text, streaming=True)
                 self._streaming_content_accumulated = True
             else:
                 self._current_streaming_bubble.append_text(text)
             self._progress_seconds = 0  # P2-4: 收到数据则重置计时
-            self._scroll_to_bottom()
+            self._smart_scroll()
 
     # ── P2-4: 超时进度提示 ──
 
@@ -1367,6 +1817,12 @@ class AiChatPage(QWidget):
         """工具执行完毕 —— 追加卡片，search_files/read_file/search_web 附带完整内容查看"""
         # P1-1: 工具执行后重置流式标记，下一轮首块文本会替换占位文字
         self._streaming_content_accumulated = False
+        # P1-02: 同步收集本轮工具命中的文件证据（回答完成后渲染引用 chip）
+        if self._tool_registry is not None:
+            try:
+                self._current_citations = self._tool_registry.get_sources()
+            except AttributeError:
+                pass
         if self._current_streaming_bubble:
             # 统计文件数量（从摘要中解析）
             action_text = None
@@ -1424,6 +1880,25 @@ class AiChatPage(QWidget):
                 self._current_streaming_bubble._adjust_size()
             # P3-3: 成功完成时添加重新生成按钮
             self._current_streaming_bubble.add_regenerate_button(self._regenerate_last)
+            # P1-02 引用溯源: 回答完成后渲染"📎 来源"chip 行（正文 [来源 N] 锚点同源）
+            if self._tool_registry is not None:
+                try:
+                    self._current_citations = self._tool_registry.get_sources()
+                except AttributeError:
+                    pass
+            if self._current_citations:
+                self._current_streaming_bubble.set_citations(
+                    self._current_citations, self._open_citation
+                )
+            elif re.search(r'\[来源\s*\d+\]', final_text or ''):
+                # P1-02 无证据兜底: 正文标了 [来源 N] 但没有可追溯证据 → 提示人工核实
+                self._current_streaming_bubble.show_no_evidence_hint()
+
+    def _open_citation(self, cite: dict):
+        """P1-02: 点击引用（chip 或正文锚点）→ 请求主窗口打开来源文件"""
+        path = cite.get("file_path", "")
+        if path:
+            self.open_file_request.emit(path, cite.get("file_id"))
 
         self._update_context_indicator()  # [MODULE-B]
         self._refresh_sessions()
@@ -1478,6 +1953,14 @@ class AiChatPage(QWidget):
 
     def _restart_worker(self):
         """统一起动/重启 worker"""
+        # P1-02: 重试/重新生成也是新一轮，清空来源收集
+        self._current_citations = []
+        if self._tool_registry is not None:
+            try:
+                self._tool_registry.clear_sources()
+            except AttributeError:
+                pass
+
         # 创建新流式气泡
         self._current_streaming_bubble = _ChatBubble("ai", self._chat_widget)
         self._current_streaming_bubble._apply_theme(self._is_dark)
@@ -1511,7 +1994,8 @@ class AiChatPage(QWidget):
     # ── 工具开关 ──
 
     def _on_tool_toggle_changed(self):
-        """工具开关变化时重建注册表"""
+        """工具胶囊点击：刷新样式并重建注册表"""
+        self._refresh_tool_chips()
         self._rebuild_tool_registry()
 
     def _rebuild_tool_registry(self):
@@ -1605,34 +2089,42 @@ class AiChatPage(QWidget):
         )
 
     def _update_context_indicator(self):
-        """[MODULE-B] 更新上下文使用率指示器"""
+        """[MODULE-B] 更新上下文使用率指示器（圆环，悬浮显示具体用量）"""
+        track = "#45475a" if self._is_dark else "#bcc0cc"
         if not self._conversation:
-            self._ctx_label.setText("上下文: --")
-            self._ctx_progress.setValue(0)
-            return
-        try:
-            size = self._conversation.estimate_context_size()
-            max_size = self._conversation.max_context_size
-            pct = min(int(size / max_size * 100), 100)
-            self._ctx_label.setText(f"上下文: {size//1000}k / {max_size//1000}k")
-            self._ctx_progress.setValue(pct)
-            if pct > 80:
-                color = "#f38ba8"
-            elif pct > 50:
-                color = "#f9e2af"
-            else:
-                color = "#a6e3a1"
-            self._ctx_progress.setStyleSheet(
-                f"QProgressBar {{ background: #313244; border: none; border-radius: 2px; }}"
-                f"QProgressBar::chunk {{ background: {color}; border-radius: 2px; }}"
-            )
-        except Exception:
-            pass
+            self._ctx_ring.set_usage(0, "#a6e3a1", track)
+            tip = "上下文占用 --"
+        else:
+            try:
+                size = self._conversation.estimate_context_size()
+                max_size = self._conversation.max_context_size
+                pct = min(int(size / max_size * 100), 100)
+                tip = f"上下文占用 {pct}%（{size//1000}k / {max_size//1000}k）"
+                if pct > 80:
+                    color = "#f38ba8"
+                elif pct > 50:
+                    color = "#f9e2af"
+                else:
+                    color = "#a6e3a1"
+                self._ctx_ring.set_usage(pct, color, track)
+            except Exception:
+                tip = "上下文占用 --"
+        self._ctx_ring.setToolTip(tip)
 
     def _scroll_to_bottom(self):
         QTimer.singleShot(30, lambda: self._scroll_area.verticalScrollBar().setValue(
             self._scroll_area.verticalScrollBar().maximum()
         ))
+
+    def _on_scroll_moved(self, value: int):
+        """用户滚动时更新跟随意图：滚离底部暂停跟随，滚回底部恢复"""
+        sb = self._scroll_area.verticalScrollBar()
+        self._follow_bottom = value >= sb.maximum() - 60
+
+    def _smart_scroll(self):
+        """流式期间仅在用户本就位于底部时跟随滚动，不打断向上回看"""
+        if getattr(self, "_follow_bottom", True):
+            self._scroll_to_bottom()
 
     # ── 主题 ──
 
@@ -1644,6 +2136,9 @@ class AiChatPage(QWidget):
         text = "#cdd6f4" if is_dark else "#4c4f69"
         accent = "#89b4fa" if is_dark else "#8839ef"
         accent2 = "#cba6f7" if is_dark else "#8839ef"
+        # 会话列表胶囊条目的选中/悬浮淡色底（主流 AI 风格）
+        sel_tint = "rgba(137, 180, 250, 0.18)" if is_dark else "rgba(136, 57, 239, 0.12)"
+        hover_tint = "rgba(137, 180, 250, 0.10)" if is_dark else "rgba(136, 57, 239, 0.06)"
 
         self.setStyleSheet(f"""
             AiChatPage {{
@@ -1690,16 +2185,30 @@ class AiChatPage(QWidget):
                 background-color: {bg}; border-color: {border};
             }}
             QListWidget#aiSessionList {{
-                background: {bg}; color: {text}; border: 1px solid {border};
-                border-radius: 6px; font-size: 10pt;
+                background: transparent; color: {text}; border: none;
+                font-size: 10pt; outline: none;
             }}
             QListWidget#aiSessionList::item {{
-                padding: 6px 8px; border-bottom: 1px solid {border};
+                background: transparent; border: none; border-radius: 10px;
+                margin: 1px 6px; padding: 7px 10px;
+            }}
+            QListWidget#aiSessionList QScrollBar:vertical {{
+                background: transparent; width: 6px; margin: 4px 2px; border: none;
+            }}
+            QListWidget#aiSessionList QScrollBar::handle:vertical {{
+                background: {border}; border-radius: 3px; min-height: 30px;
+            }}
+            QListWidget#aiSessionList QScrollBar::handle:vertical:hover {{
+                background: {text};
+            }}
+            QListWidget#aiSessionList QScrollBar::add-line:vertical,
+            QListWidget#aiSessionList QScrollBar::sub-line:vertical {{
+                height: 0px;
             }}
             QListWidget#aiSessionList::item:selected {{
-                background: {accent}; color: #1e1e2e;
+                background: {sel_tint}; color: {text};
             }}
-            QListWidget#aiSessionList::item:hover {{ background: {card_bg}; }}
+            QListWidget#aiSessionList::item:hover {{ background: {hover_tint}; }}
             QLineEdit#aiSessionSearch {{
                 background: {bg}; color: {text};
                 border: 1px solid {border}; border-radius: 6px;
@@ -1734,25 +2243,35 @@ class AiChatPage(QWidget):
             }}
         """)
 
-        # 单独强制设置每个 checkbox 样式（防止全局 QSS 覆盖）
-        for cb in self._tool_checks.values():
-            cb.setStyleSheet(f"""
-                QCheckBox {{
-                    color: {text}; font-size: 10pt; spacing: 8px;
-                    background: transparent; border: none;
-                }}
-                QCheckBox::indicator {{
-                    width: 16px; height: 16px;
-                    border: 2px solid {border}; border-radius: 3px;
-                    background-color: {bg};
-                }}
-                QCheckBox::indicator:checked {{
-                    background-color: {accent}; border-color: {accent};
-                }}
-                QCheckBox::indicator:unchecked {{
-                    background-color: {bg}; border-color: {border};
-                }}
-            """)
+        # 上下文指示器跟随主题（圆环轨道色）
+        if getattr(self, "_ctx_ring", None):
+            self._update_context_indicator()
+
+        # 工具胶囊 chips 样式（激活=主题色描边+淡底，未激活=灰色描边）
+        if getattr(self, "_tool_checks", None):
+            self._refresh_tool_chips()
+
+    def _refresh_tool_chips(self):
+        """按选中状态刷新工具胶囊样式（主题切换 / 点击后调用）"""
+        is_dark = self._is_dark
+        accent = "#89b4fa" if is_dark else "#8839ef"
+        border = "#45475a" if is_dark else "#bcc0cc"
+        muted = "#a6adc8" if is_dark else "#6c6f85"
+        sel_tint = "rgba(137, 180, 250, 0.18)" if is_dark else "rgba(136, 57, 239, 0.12)"
+        for chip in self._tool_checks.values():
+            if chip.isChecked():
+                chip.setStyleSheet(
+                    f"QPushButton {{ background: {sel_tint}; color: {accent};"
+                    f" border: 1px solid {accent}; border-radius: 13px;"
+                    f" padding: 2px 12px; font-size: 9pt; }}"
+                )
+            else:
+                chip.setStyleSheet(
+                    f"QPushButton {{ background: transparent; color: {muted};"
+                    f" border: 1px solid {border}; border-radius: 13px;"
+                    f" padding: 2px 12px; font-size: 9pt; }}"
+                    f"QPushButton:hover {{ border-color: {accent}; }}"
+                )
 
     def apply_theme(self, theme_name: str):
         self._theme = theme_name

@@ -356,6 +356,8 @@ class MainWindow(QMainWindow):
         self.ai_search_tab.go_back.connect(self._on_ai_search_back)
         self.ai_search_tab.show_results.connect(self._on_ai_show_results)
         self.ai_search_tab.navigate_to_search.connect(self._on_ai_navigate_to_search)
+        # P1-02 引用溯源: 点击 AI 回答中的来源引用 → 打开对应文件
+        self.ai_search_tab.open_file_request.connect(self._on_ai_open_citation)
 
     # ── 反馈方法（供子页面调用） ──
 
@@ -434,6 +436,10 @@ class MainWindow(QMainWindow):
         """从 AI 助手工具卡片跳转到搜索 Tab，并回填参数"""
         self.switch_to_tab(3)  # 文件搜索页 index=3
         self.search_tab._apply_search_params(params, source="AI 助手")
+
+    def _on_ai_open_citation(self, file_path: str, file_id=None):
+        """P1-02 引用溯源: 打开 AI 回答中引用的来源文件（系统默认程序）"""
+        self.search_tab._safe_open_file(file_path, file_id=file_id)
 
     def _on_ai_show_results(self, result: dict):
         """AI 搜索完成后，将结果填入文件搜索表格"""

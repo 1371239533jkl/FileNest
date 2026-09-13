@@ -208,6 +208,10 @@ class DashboardTab(QWidget):
         self.directory_usage = BarChartWidget()
         self.directory_usage.setMinimumHeight(210)
         self._grid.addWidget(self.directory_usage)
+        # P1-09: 目录画像入口
+        profile_btn = QPushButton("📂 目录画像")
+        profile_btn.clicked.connect(self._open_folder_profile)
+        self._grid.addWidget(profile_btn)
         self._grid.addStretch()
 
         scroll.setWidget(self._content)
@@ -477,6 +481,11 @@ class DashboardTab(QWidget):
         else:
             self.insight_label.setText("AI 洞察暂时不可用，其他文件管理功能不受影响。")
         logger.warning(f"仪表盘 AI 洞察失败: {err}")
+
+    def _open_folder_profile(self):
+        """P1-09: 打开目录画像对话框"""
+        from ui.understanding_dialogs import FolderProfileDialog
+        FolderProfileDialog(self).exec()
 
     def _on_quick_scan(self):
         self._navigate(1)
