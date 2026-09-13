@@ -56,6 +56,16 @@ class DuplicatesTab(QWidget):
         self._ai_worker = None
         self._init_ui()
 
+    def _open_similarity(self):
+        """P1-07: 相似图片检测对话框"""
+        from ui.understanding_dialogs import SimilarityDialog
+        SimilarityDialog(self).exec()
+
+    def _open_versions(self):
+        """P1-08: 文件版本关系对话框"""
+        from ui.understanding_dialogs import VersionRelationsDialog
+        VersionRelationsDialog(self).exec()
+
     def _init_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -71,6 +81,13 @@ class DuplicatesTab(QWidget):
         self.stats_label = QLabel("")
         self.stats_label.setObjectName("subtitleLabel")
         header.addWidget(self.stats_label)
+        # P1-07/P1-08: 内容理解入口（相似图片 / 版本关系）
+        sim_btn = QPushButton("🖼 相似图片")
+        sim_btn.clicked.connect(self._open_similarity)
+        header.addWidget(sim_btn)
+        ver_btn = QPushButton("🔗 版本关系")
+        ver_btn.clicked.connect(self._open_versions)
+        header.addWidget(ver_btn)
         layout.addLayout(header)
 
         hint = QLabel(

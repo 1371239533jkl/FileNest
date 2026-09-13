@@ -85,6 +85,7 @@ class TagsTab(QWidget):
         for text, obj, fn in [
             ("➕ 新建标签", "primaryBtn", self._create_tag),
             ("⇄ 合并标签", None, self._merge_tag),
+            ("🗂 层级管理", None, self._open_hierarchy),
             ("🗑 删除标签", "dangerBtn", self._delete_tag),
             (None, None, None),
             ("🏷 打标签", "successBtn", self._batch_tag),
@@ -204,6 +205,12 @@ class TagsTab(QWidget):
 
         tags = self.tag_dao.get_all_tags()
         palette = _TAG_LIGHT if self._theme == 'light' else _TAG_COLORS
+        # P1-10: 用户在层级管理对话框设置的颜色
+        custom_colors = {
+            r['tag_name']: r['color'] for r in
+            (self.tag_dao.db.execute_query(
+                "SELECT tag_name, color FROM tags WHERE color IS NOT NULL") or [])
+        }
 
         # 空状态检测
         self._has_tags = bool(tags)
@@ -217,6 +224,9 @@ class TagsTab(QWidget):
         for t in tags:
             nm = t['tag_name']
             bg, fg = palette[_ci(nm)]
+            # P1-10: 层级管理里设置的自定义颜色优先
+            if custom_colors.get(nm):
+                bg, fg = custom_colors[nm], '#1e1e2e'
 
             btn = self._make_btn(f" {nm} ", bg, fg)
             btn.clicked.connect(lambda checked, n=nm: self._on_tag_click(n))
@@ -374,6 +384,12 @@ class TagsTab(QWidget):
                 if v:
                     ids.append(v)
         return ids
+
+    def _open_hierarchy(self):
+        """P1-10: 打开标签层级管理对话框"""
+        from ui.understanding_dialogs import TagHierarchyDialog
+        TagHierarchyDialog(self).exec()
+        self.refresh_data()
 
     def _create_tag(self):
         name, ok = QInputDialog.getText(self, "新建标签", "输入标签名:")

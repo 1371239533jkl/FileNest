@@ -437,6 +437,10 @@ class ClassifyTab(QWidget):
         move_btn.clicked.connect(self._batch_move)
         batch_layout.addWidget(move_btn)
 
+        self.ai_organize_btn = QPushButton("🤖 AI 智能整理")
+        self.ai_organize_btn.clicked.connect(self._ai_organize)
+        batch_layout.addWidget(self.ai_organize_btn)
+
         batch_layout.addStretch()
 
         self.selected_label = QLabel("")
@@ -1130,6 +1134,164 @@ class ClassifyTab(QWidget):
             operation_name="批量移动",
             extra_args={'target_dir': target})
 
+    # ── AI 智能整理 ──
+
+    def _ai_organize(self):
+        """AI 智能整理：根据用户需求生成整理计划并预览执行。"""
+        ids = self._get_selected_ids()
+        if not ids:
+            # 如果没选，用当前分类下的所有文件
+            ids = [f['id'] for f in self._current_files] if hasattr(self, '_current_files') else []
+
+        if not ids:
+            QMessageBox.information(self, "提示", "没有可整理的文件")
+            return
+
+        if not self.ai_layer.enabled:
+            QMessageBox.information(
+                self, "提示",
+                "AI 未启用，请先在设置中配置 AI 模型\n"
+                "（支持本地 Ollama，零配置自动发现）"
+            )
+            return
+
+        # 询问用户整理需求
+        request, ok = QInputDialog.getMultiLineText(
+            self, "AI 智能整理",
+            "请描述你的整理需求：\n例如：按文件类型分类整理、按项目归档、清理重复文件等",
+            "按文件类型分类整理到不同文件夹"
+        )
+        if not ok or not request.strip():
+            return
+
+        # 获取文件信息
+        files = []
+        for fid in ids[:200]:  # 限制数量避免 token 爆炸
+            f = self.file_dao.get_by_id(fid)
+            if f:
+                files.append(f)
+
+        if not files:
+            QMessageBox.warning(self, "提示", "未找到有效文件")
+            return
+
+        # 生成整理计划
+        self.ai_organize_btn.setEnabled(False)
+        self.ai_organize_btn.setText("🤖 生成中...")
+
+        class _PlanWorker(QThread):
+            done = pyqtSignal(dict)
+            error = pyqtSignal(str)
+
+            def __init__(self, ai_layer, request, files):
+                super().__init__()
+                self._ai = ai_layer
+                self._req = request
+                self._files = files
+
+            def run(self):
+                try:
+                    plan = self._ai.generate_organize_plan(self._req, self._files)
+                    if plan:
+                        self.done.emit(plan)
+                    else:
+                        self.error.emit("AI 未能生成有效的整理计划")
+                except Exception as e:
+                    self.error.emit(str(e))
+
+        self._ai_plan_worker = _PlanWorker(self.ai_layer, request, files)
+        self._ai_plan_worker.done.connect(self._show_organize_plan)
+        self._ai_plan_worker.error.connect(self._on_organize_error)
+        self._ai_plan_worker.start()
+
+    def _on_organize_error(self, err: str):
+        self.ai_organize_btn.setEnabled(True)
+        self.ai_organize_btn.setText("🤖 AI 智能整理")
+        QMessageBox.critical(self, "错误", f"生成整理计划失败: {err}")
+
+    def _show_organize_plan(self, plan: dict):
+        """显示整理计划预览对话框。"""
+        self.ai_organize_btn.setEnabled(True)
+        self.ai_organize_btn.setText("🤖 AI 智能整理")
+
+        ops = plan.get('operations', [])
+        if not ops:
+            QMessageBox.information(self, "整理计划", "AI 认为当前文件不需要整理")
+            return
+
+        # ponytail: 计划刚由本库数据生成、执行时逐条 try/except 兜底，
+        # 不走 OperationPlan（其 validate 非索引对齐且整计划单一 action），就地校验
+        validation = []
+        for op in ops:
+            err = ''
+            if not op.get('file_id'):
+                err = '缺少 file_id'
+            elif not os.path.exists(op.get('old_path', '')):
+                err = '源文件不存在'
+            elif (op.get('action') in ('move', 'rename')
+                  and op.get('new_path') and os.path.exists(op['new_path'])):
+                err = f'目标已存在: {op["new_path"]}'
+            validation.append({'valid': not err, 'error': err})
+
+        # 显示预览对话框
+        dlg = _OrganizePlanDialog(plan, validation, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            # 用户确认，仅执行勾选的操作
+            self._execute_organize_plan(ops, dlg.get_selected_operations())
+
+    def _execute_organize_plan(self, ops, selected):
+        """执行整理计划（仅执行用户勾选的操作）。"""
+        if not selected:
+            QMessageBox.warning(self, "提示", "没有勾选任何操作")
+            return
+        chosen = [ops[i] for i in selected if 0 <= i < len(ops)]
+
+        counts = {'move': 0, 'rename': 0, 'delete': 0}
+        for op in chosen:
+            counts[op.get('action', 'move')] = counts.get(op.get('action', 'move'), 0) + 1
+
+        reply = QMessageBox.question(
+            self, "确认执行",
+            f"将执行 {len(chosen)} 个文件操作：\n"
+            f"  移动: {counts.get('move', 0)} 个\n"
+            f"  重命名: {counts.get('rename', 0)} 个\n"
+            f"  删除: {counts.get('delete', 0)} 个\n\n"
+            f"操作不可撤销，确定继续吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        # 按操作类型分别执行
+        success = 0
+        failed = 0
+        errors = []
+
+        for op in chosen:
+            action = op.get('action', 'move')
+            file_id = op.get('file_id')
+            try:
+                if action == 'move':
+                    self.file_manager.move_file(file_id, os.path.dirname(op.get('new_path', '')))
+                elif action == 'rename':
+                    self.file_manager.rename_file(file_id, new_name=os.path.basename(op.get('new_path', '')))
+                elif action == 'delete':
+                    self.file_manager.delete_file(file_id)
+                else:
+                    raise ValueError(f"未知操作类型: {action}")
+                success += 1
+            except Exception as e:
+                failed += 1
+                errors.append(f"{os.path.basename(op.get('old_path', '?'))}: {e}")
+
+        # 刷新
+        self.refresh_data()
+
+        msg = f"整理完成：成功 {success} 个，失败 {failed} 个"
+        if errors:
+            msg += "\n\n失败详情：\n" + "\n".join(errors[:10])
+        QMessageBox.information(self, "整理完成", msg)
+
     def _start_batch_operation(self, operation_func, file_ids, operation_name, extra_args=None):
         """启动后台批量操作，显示进度"""
         self.reclassify_progress.setVisible(True)
@@ -1757,3 +1919,97 @@ class ClassifyTab(QWidget):
         """打开文件夹按钮点击"""
         if hasattr(self, '_current_preview_path') and self._current_preview_path:
             self._safe_open_folder(self._current_preview_path, file_id=getattr(self, '_current_preview_id', None))
+
+
+class _OrganizePlanDialog(QDialog):
+    """AI 整理计划预览对话框。
+
+    展示 AI 生成的整理计划，用户可勾选/取消操作，确认后执行。
+    """
+
+    def __init__(self, plan: dict, validation: list, parent=None):
+        super().__init__(parent)
+        self._plan = plan
+        self._validation = validation
+        self.setWindowTitle("🤖 AI 整理计划")
+        self.setMinimumSize(700, 500)
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        # 摘要
+        summary = self._plan.get('plan_summary', 'AI 生成的整理计划')
+        summary_label = QLabel(f"📋 {summary}")
+        summary_label.setStyleSheet("font-size: 13pt; font-weight: bold;")
+        summary_label.setWordWrap(True)
+        layout.addWidget(summary_label)
+
+        # 统计
+        ops = self._plan.get('operations', [])
+        move_count = sum(1 for o in ops if o.get('action') == 'move')
+        rename_count = sum(1 for o in ops if o.get('action') == 'rename')
+        delete_count = sum(1 for o in ops if o.get('action') == 'delete')
+        valid_count = sum(1 for v in self._validation if v.get('valid'))
+        invalid_count = len(self._validation) - valid_count
+
+        stats = QLabel(
+            f"共 {len(ops)} 个操作："
+            f"📁 移动 {move_count} 个  |  "
+            f"✏️ 重命名 {rename_count} 个  |  "
+            f"🗑 删除 {delete_count} 个  |  "
+            f"✅ 有效 {valid_count} 个  |  "
+            f"❌ 无效 {invalid_count} 个"
+        )
+        stats.setStyleSheet("font-size: 10pt;")
+        layout.addWidget(stats)
+
+        # 操作列表
+        from PyQt6.QtWidgets import QListWidget, QListWidgetItem
+        self.op_list = QListWidget()
+        self.op_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+
+        for i, (op, val) in enumerate(zip(ops, self._validation)):
+            action = op.get('action', '')
+            old_path = op.get('old_path', '')
+            new_path = op.get('new_path', '')
+            reason = op.get('reason', '')
+            valid = val.get('valid', True)
+            error = val.get('error', '')
+
+            icon = {'move': '📁', 'rename': '✏️', 'delete': '🗑'}.get(action, '❓')
+            status = "✅" if valid else f"❌ {error}"
+
+            item_text = (
+                f"{icon} {os.path.basename(old_path)}  →  "
+                f"{os.path.basename(new_path) if new_path else '(删除)'}\n"
+                f"   💡 {reason}  {status}"
+            )
+            item = QListWidgetItem(item_text)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if valid else Qt.CheckState.Unchecked)
+            if not valid:
+                item.setForeground(QBrush(QColor("#f38ba8")))
+            self.op_list.addItem(item)
+
+        layout.addWidget(self.op_list, 1)
+
+        # 按钮
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.button(QDialogButtonBox.StandardButton.Ok).setText("✅ 确认执行")
+        btn_box.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+    def get_selected_operations(self) -> list[int]:
+        """获取用户勾选的操作索引。"""
+        selected = []
+        for i in range(self.op_list.count()):
+            if self.op_list.item(i).checkState() == Qt.CheckState.Checked:
+                selected.append(i)
+        return selected
