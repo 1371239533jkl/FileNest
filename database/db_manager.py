@@ -111,9 +111,47 @@ class DBManager:
             if 'fast_hash' not in cols:
                 conn.execute("ALTER TABLE files ADD COLUMN fast_hash TEXT")
                 logger.info("迁移: files 表新增 fast_hash 列")
+            if 'perceptual_hash' not in cols:
+                conn.execute("ALTER TABLE files ADD COLUMN perceptual_hash TEXT")
+                logger.info("迁移: files 表新增 perceptual_hash 列")
             conn.commit()
         except Exception as e:
             logger.warning(f"files 表列迁移跳过: {e}")
+
+    def _migrate_batch5_tables(self, conn):
+        """批次5 内容理解：版本关系表 + 标签层级列/别名录（幂等）。"""
+        try:
+            # tags 表补层级与颜色列
+            cols = [r['name'] for r in conn.execute("PRAGMA table_info(tags)").fetchall()]
+            if 'parent_id' not in cols:
+                conn.execute("ALTER TABLE tags ADD COLUMN parent_id INTEGER")
+                logger.info("迁移: tags 表新增 parent_id 列")
+            if 'color' not in cols:
+                conn.execute("ALTER TABLE tags ADD COLUMN color TEXT")
+                logger.info("迁移: tags 表新增 color 列")
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS file_relations (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id_a   INTEGER NOT NULL,
+                    file_id_b   INTEGER NOT NULL,
+                    relation    TEXT    NOT NULL DEFAULT 'version',
+                    confidence  REAL    DEFAULT 0.0,
+                    status      TEXT    DEFAULT 'pending',
+                    create_time TEXT    NOT NULL,
+                    UNIQUE(file_id_a, file_id_b, relation)
+                );
+                CREATE INDEX IF NOT EXISTS idx_relations_a ON file_relations(file_id_a);
+                CREATE INDEX IF NOT EXISTS idx_relations_b ON file_relations(file_id_b);
+                CREATE TABLE IF NOT EXISTS tag_aliases (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    alias       TEXT    NOT NULL UNIQUE,
+                    canonical   TEXT    NOT NULL,
+                    create_time TEXT    NOT NULL
+                );
+            """)
+            conn.commit()
+        except Exception as e:
+            logger.warning(f"批次5 表迁移跳过: {e}")
 
     def _migrate_cleanup_tables(self, conn):
         """创建清理中心配套表（幂等）。"""
@@ -155,6 +193,7 @@ class DBManager:
                 content_fingerprint TEXT,
                 hash_state          TEXT,
                 fast_hash           TEXT,
+                perceptual_hash     TEXT,
                 status          TEXT            DEFAULT 'active'
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_file_path ON files(file_path);
@@ -293,6 +332,9 @@ class DBManager:
 
         # === 清理中心配套表（幂等）===
         self._migrate_cleanup_tables(conn)
+
+        # === 批次5 内容理解表（幂等）===
+        self._migrate_batch5_tables(conn)
 
         # === FTS5 触发器（幂等：DROP IF EXISTS 后重建）===
         conn.executescript("""

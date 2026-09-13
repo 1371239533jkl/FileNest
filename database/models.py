@@ -41,6 +41,14 @@ class FileDAO:
     def get_by_id(self, file_id: int) -> Optional[dict]:
         return self.db.execute_one("SELECT * FROM files WHERE id = ?", (file_id,))
 
+    def get_by_ids(self, file_ids: list[int]) -> list[dict]:
+        """批量按 ID 获取文件。"""
+        if not file_ids:
+            return []
+        placeholders = ",".join("?" * len(file_ids))
+        sql = f"SELECT * FROM files WHERE id IN ({placeholders}) AND status = 'active'"
+        return self.db.execute_query(sql, tuple(file_ids))
+
     def get_by_path(self, file_path: str) -> Optional[dict]:
         return self.db.execute_one(
             "SELECT * FROM files WHERE file_path = ? AND status = 'active'", (file_path,))
@@ -299,6 +307,44 @@ class FileDAO:
             dir_stats.items(), key=lambda x: x[1]['total_size'], reverse=True)[:limit]
         return [{'dir_path': k, 'file_count': v['count'], 'total_size': v['total_size']}
                 for k, v in result]
+
+    def get_directory_profile(self, dir_path: str) -> dict:
+        """P1-09 文件夹画像：单目录的类型分布/大小/重复数/时间范围。
+
+        dir_path 支持正反斜杠，匹配该目录直属文件（含子目录文件按父目录归属）。
+        """
+        normalized = (dir_path or '').replace('\\', '/').rstrip('/')
+        rows = self.db.execute_query(
+            "SELECT file_name, file_type, file_size, is_duplicate, modify_time "
+            "FROM files WHERE status = 'active'") or []
+        files = []
+        for r in rows:
+            fp = (r.get('file_path') or '').replace('\\', '/')
+            if fp.rsplit('/', 1)[0] == normalized and fp.rsplit('/', 1)[0] != fp:
+                files.append(r)
+        type_dist: dict = defaultdict(lambda: {'count': 0, 'total_size': 0})
+        total_size = dup_count = 0
+        times = []
+        for f in files:
+            t = f.get('file_type') or 'other'
+            type_dist[t]['count'] += 1
+            type_dist[t]['total_size'] += (f.get('file_size') or 0)
+            total_size += (f.get('file_size') or 0)
+            dup_count += 1 if f.get('is_duplicate') else 0
+            if f.get('modify_time'):
+                times.append(str(f['modify_time']))
+        return {
+            'dir_path': normalized,
+            'file_count': len(files),
+            'total_size': total_size,
+            'dup_count': dup_count,
+            'newest': max(times) if times else None,
+            'oldest': min(times) if times else None,
+            'type_distribution': [
+                {'file_type': t, 'count': v['count'], 'total_size': v['total_size']}
+                for t, v in sorted(type_dist.items(), key=lambda x: -x[1]['count'])
+            ],
+        }
 
     def get_monthly_trend(self) -> list:
         sql = """SELECT
@@ -893,6 +939,11 @@ class TagDAO:
                 (target, source))
             conn.execute("DELETE FROM file_tags WHERE tag_name = ?", (source,))
             conn.execute("DELETE FROM tags WHERE tag_name = ?", (source,))
+            # P1-10: 别名随合并迁移（指向 source 的别名改指 target）
+            conn.execute(
+                "UPDATE tag_aliases SET canonical = ? WHERE canonical = ?",
+                (target, source))
+            conn.execute("DELETE FROM tag_aliases WHERE alias = ?", (source,))
             conn.commit()
             return cursor.rowcount
         except Exception:
@@ -909,3 +960,128 @@ class TagDAO:
                 params.append((fid, tag.strip(), now))
         sql = "INSERT OR IGNORE INTO file_tags (file_id, tag_name, create_time) VALUES (?, ?, ?)"
         return self.db.execute_many(sql, params)
+
+    # ── P1-10 标签层级与别名 ──
+
+    def set_parent(self, child_name: str, parent_name: Optional[str]) -> bool:
+        """设置/取消父子层级。防循环：parent 不能是 child 自己或其后代。失败返回 False。"""
+        if not parent_name:
+            self.db.execute_update(
+                "UPDATE tags SET parent_id = NULL WHERE tag_name = ?", (child_name,))
+            return True
+        child = self.db.execute_one(
+            "SELECT id FROM tags WHERE tag_name = ?", (child_name,))
+        parent = self.db.execute_one(
+            "SELECT id FROM tags WHERE tag_name = ?", (parent_name,))
+        if not child or not parent or child['id'] == parent['id']:
+            return False
+        # 沿 parent 链向上走，出现 child 即成环
+        seen = {child['id']}
+        cur = parent['id']
+        while cur is not None:
+            if cur in seen:
+                return False
+            seen.add(cur)
+            row = self.db.execute_one(
+                "SELECT parent_id FROM tags WHERE id = ?", (cur,))
+            cur = row['parent_id'] if row else None
+        self.db.execute_update(
+            "UPDATE tags SET parent_id = ? WHERE tag_name = ?",
+            (parent['id'], child_name))
+        return True
+
+    def get_tag_tree(self) -> list[dict]:
+        """全部标签按层级扁平返回（children 嵌套），供层级管理对话框使用。"""
+        rows = self.db.execute_query(
+            "SELECT id, tag_name, parent_id, color FROM tags ORDER BY tag_name") or []
+        by_id = {r['id']: {**r, 'children': []} for r in rows}
+        roots = []
+        for r in rows:
+            node = by_id[r['id']]
+            p = by_id.get(r['parent_id']) if r['parent_id'] else None
+            (p['children'] if p else roots).append(node)
+        return roots
+
+    def get_tag_tree_flat(self) -> list[dict]:
+        """全部标签平铺（tag_name 列表用），与 get_tag_tree 同源。"""
+        return self.db.execute_query(
+            "SELECT tag_name FROM tags ORDER BY tag_name") or []
+
+    def set_color(self, tag_name: str, color: Optional[str]) -> int:
+        return self.db.execute_update(
+            "UPDATE tags SET color = ? WHERE tag_name = ?", (color, tag_name))
+
+    def add_alias(self, alias: str, canonical: str) -> bool:
+        """登记别名：alias 是 canonical 的同义词。alias 冲突时返回 False。"""
+        try:
+            self.db.execute_insert(
+                "INSERT OR IGNORE INTO tag_aliases (alias, canonical, create_time) "
+                "VALUES (?, ?, ?)", (alias.strip(), canonical.strip(), datetime.now()))
+            return True
+        except Exception:
+            return False
+
+    def resolve_alias(self, alias: str) -> str:
+        """别名 → 规范名；非别名原样返回。"""
+        row = self.db.execute_one(
+            "SELECT canonical FROM tag_aliases WHERE alias = ?", (alias.strip(),))
+        return row['canonical'] if row else alias
+
+    def get_aliases(self, canonical: str) -> list[str]:
+        return [r['alias'] for r in self.db.execute_query(
+            "SELECT alias FROM tag_aliases WHERE canonical = ?", (canonical,)) or []]
+
+    def delete_alias(self, alias: str) -> int:
+        return self.db.execute_update(
+            "DELETE FROM tag_aliases WHERE alias = ?", (alias,))
+
+
+class VersionRelationDAO:
+    """P1-08 文件版本关系表操作（file_relations）。"""
+
+    def __init__(self, db_manager=None):
+        self.db = db_manager if db_manager is not None else db
+
+    def upsert_suggestion(self, file_id_a: int, file_id_b: int,
+                          confidence: float, relation: str = 'version') -> bool:
+        """写入候选关系（pending）；已存在（任何状态）不覆盖。返回是否真正新增。"""
+        a, b = sorted((file_id_a, file_id_b))
+        if self.db.execute_one(
+                "SELECT 1 FROM file_relations "
+                "WHERE file_id_a = ? AND file_id_b = ? AND relation = ?",
+                (a, b, relation)):
+            return False
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        self.db.execute_insert(
+            "INSERT INTO file_relations "
+            "(file_id_a, file_id_b, relation, confidence, status, create_time) "
+            "VALUES (?, ?, ?, ?, 'pending', ?)", (a, b, relation, confidence, now))
+        return True
+
+    def get_by_status(self, status: str = 'pending') -> list:
+        return self.db.execute_query(
+            "SELECT fr.*, fa.file_name AS name_a, fa.file_path AS path_a, "
+            "fb.file_name AS name_b, fb.file_path AS path_b "
+            "FROM file_relations fr "
+            "JOIN files fa ON fa.id = fr.file_id_a "
+            "JOIN files fb ON fb.id = fr.file_id_b "
+            "WHERE fr.status = ? ORDER BY fr.confidence DESC", (status,)) or []
+
+    def set_status(self, relation_id: int, status: str) -> int:
+        """status: confirmed（人工确认）/ dismissed（解除）/ pending"""
+        return self.db.execute_update(
+            "UPDATE file_relations SET status = ? WHERE id = ?", (status, relation_id))
+
+    def get_relations_for_file(self, file_id: int,
+                               status: str = 'confirmed') -> list:
+        return self.db.execute_query(
+            "SELECT fr.*, fa.file_name AS name_a, fb.file_name AS name_b "
+            "FROM file_relations fr "
+            "JOIN files fa ON fa.id = fr.file_id_a "
+            "JOIN files fb ON fb.id = fr.file_id_b "
+            "WHERE fr.status = ? AND (fr.file_id_a = ? OR fr.file_id_b = ?)",
+            (status, file_id, file_id)) or []
+
+    def remove(self, relation_id: int) -> int:
+        return self.db.execute_update(
+            "DELETE FROM file_relations WHERE id = ?", (relation_id,))

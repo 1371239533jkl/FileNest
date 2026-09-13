@@ -29,13 +29,34 @@ _TEXT_EXTENSIONS = {
 _PDF_EXT = '.pdf'
 _DOCX_EXT = '.docx'
 
+# P1-06: 图片 OCR 提取（需安装 pytesseract + tesseract 引擎，未装自动降级为不支持）
+_OCR_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff', '.webp'}
+
 # 最大读取字符数（避免超大文件塞满 prompt）
 _MAX_CHARS = 5000
+
+# OCR 可用性缓存（tesseract 探测开销大，进程内只探一次）
+_ocr_ok: Optional[bool] = None
+
+
+def ocr_available() -> bool:
+    """P1-06: OCR Provider 是否可用（pytesseract 可导入且 tesseract 引擎存在）"""
+    global _ocr_ok
+    if _ocr_ok is None:
+        try:
+            import pytesseract
+            pytesseract.get_tesseract_version()
+            _ocr_ok = True
+        except Exception:
+            _ocr_ok = False
+    return _ocr_ok
 
 
 def can_read_content(file_path: str) -> bool:
     """检查文件是否支持内容提取"""
     ext = os.path.splitext(file_path)[1].lower()
+    if ext in _OCR_EXTENSIONS:
+        return ocr_available()
     return ext in _TEXT_EXTENSIONS or ext == _PDF_EXT or ext == _DOCX_EXT
 
 
@@ -66,6 +87,10 @@ def read_file_content(file_path: str, max_chars: int = _MAX_CHARS) -> Optional[s
         # Word
         if ext == _DOCX_EXT:
             return _read_docx_file(file_path, max_chars)
+
+        # P1-06: 图片 OCR（未安装 pytesseract 时返回 None → indexer 记 failed，不阻断）
+        if ext in _OCR_EXTENSIONS:
+            return _read_image_ocr(file_path, max_chars)
 
         return None
 
@@ -134,4 +159,37 @@ def _read_docx_file(path: str, max_chars: int) -> Optional[str]:
         return None
     except Exception as e:
         logger.debug(f"Word 读取失败: {e}")
+        return None
+
+
+def _read_image_ocr(path: str, max_chars: int) -> Optional[str]:
+    """P1-06: OCR 提取图片文字，记录识别语言与置信度（内容首行）。
+
+    依赖可选：pytesseract + tesseract 引擎 + Pillow。识别语言通过
+    环境变量 OCR_LANG 配置（默认 chi_sim+eng）。失败返回 None，不影响扫描。
+    """
+    if not ocr_available():
+        return None
+    try:
+        import pytesseract
+        from PIL import Image
+
+        lang = os.environ.get('OCR_LANG', 'chi_sim+eng')
+        with Image.open(path) as img:
+            data = pytesseract.image_to_data(
+                img, lang=lang, output_type=pytesseract.Output.DICT)
+        words = [(str(w), float(c)) for w, c in zip(data['text'], data['conf'])
+                 if str(w).strip() and float(c) >= 0]
+        if not words:
+            return None
+        conf = round(sum(c for _, c in words) / len(words), 1)
+        text = ' '.join(w for w, _ in words)
+        if len(text) > max_chars:
+            text = text[:max_chars] + '...(内容已截断)'
+        return f"[OCR lang={lang} conf={conf}%]\n{text}"
+    except ImportError:
+        logger.debug("pytesseract/Pillow 未安装，跳过 OCR 内容提取")
+        return None
+    except Exception as e:
+        logger.debug(f"OCR 提取失败 ({path}): {e}")
         return None
