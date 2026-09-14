@@ -7,6 +7,17 @@ from collections import defaultdict
 import re
 from typing import Optional, Any
 
+# 延迟导入避免循环依赖（db_manager 在运行时注入）
+db = None
+
+
+def _ensure_db():
+    global db
+    if db is None:
+        from database.db_manager import db as _db
+        db = _db
+    return db
+
 
 class FileDAO:
     """文件表操作"""
@@ -1040,7 +1051,7 @@ class VersionRelationDAO:
     """P1-08 文件版本关系表操作（file_relations）。"""
 
     def __init__(self, db_manager=None):
-        self.db = db_manager if db_manager is not None else db
+        self.db = db_manager if db_manager is not None else _ensure_db()
 
     def upsert_suggestion(self, file_id_a: int, file_id_b: int,
                           confidence: float, relation: str = 'version') -> bool:
@@ -1085,3 +1096,242 @@ class VersionRelationDAO:
     def remove(self, relation_id: int) -> int:
         return self.db.execute_update(
             "DELETE FROM file_relations WHERE id = ?", (relation_id,))
+
+
+class FileEventDAO:
+    """批次6 外部文件事件表操作（file_events）。"""
+
+    def __init__(self, db_manager=None):
+        self.db = db_manager if db_manager is not None else _ensure_db()
+
+    def insert(self, event_type: str, file_path: str,
+               dest_path: Optional[str] = None, file_id: Optional[int] = None,
+               source: str = 'watcher', details: Optional[str] = None) -> int:
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        return self.db.execute_insert(
+            "INSERT INTO file_events (event_type, file_path, dest_path, file_id, "
+            "event_time, source, details) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (event_type, file_path, dest_path, file_id, now, source, details))
+
+    def insert_batch(self, events: list) -> int:
+        """批量插入。events: list of dict (event_type, file_path, dest_path?, file_id?, source?, details?)"""
+        if not events:
+            return 0
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        rows = []
+        for ev in events:
+            rows.append((
+                ev['event_type'], ev['file_path'], ev.get('dest_path'),
+                ev.get('file_id'), now, ev.get('source', 'watcher'), ev.get('details')
+            ))
+        self.db.execute_many(
+            "INSERT INTO file_events (event_type, file_path, dest_path, file_id, "
+            "event_time, source, details) VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+        return len(rows)
+
+    def search(self, event_type: Optional[str] = None,
+               start_date: Optional[str] = None, end_date: Optional[str] = None,
+               path_prefix: Optional[str] = None, limit: int = 200) -> list:
+        conditions, params = [], []
+        if event_type:
+            conditions.append("event_type = ?")
+            params.append(event_type)
+        if start_date:
+            conditions.append("event_time >= ?")
+            params.append(start_date)
+        if end_date:
+            conditions.append("event_time <= ?")
+            params.append(end_date)
+        if path_prefix:
+            conditions.append("file_path LIKE ?")
+            params.append(path_prefix + '%')
+        where = " AND ".join(conditions) if conditions else "1=1"
+        sql = f"SELECT * FROM file_events WHERE {where} ORDER BY event_time DESC LIMIT ?"
+        params.append(limit)
+        return self.db.execute_query(sql, tuple(params)) or []
+
+    def delete_older_than(self, days: int = 90) -> int:
+        """清理 N 天前的事件，默认 90 天。"""
+        from datetime import timedelta
+        cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
+        return self.db.execute_update("DELETE FROM file_events WHERE event_time < ?", (cutoff,))
+
+
+class TimelineDAO:
+    """合并时间线（操作历史 + 外部文件事件）。"""
+
+    def __init__(self, db_manager=None):
+        self.db = db_manager if db_manager is not None else _ensure_db()
+
+    def get_combined(self, mode: str = 'all',
+                     op_type: Optional[str] = None,
+                     start_date: Optional[str] = None,
+                     end_date: Optional[str] = None,
+                     path_prefix: Optional[str] = None,
+                     limit: int = 200) -> list:
+        """
+        统一时间线查询。
+        mode: 'all' 全部 / 'operations' 仅操作 / 'external' 仅外部事件
+        返回每条记录含 event_source: 'operation' | 'external'
+        """
+        parts = []
+        params = []
+
+        if mode in ('all', 'operations'):
+            op_conditions, op_params = self._build_where(
+                table_prefix='oh', op_type=op_type, start_date=start_date,
+                end_date=end_date, path_prefix=path_prefix, is_operation=True)
+            op_sql = f"""
+                SELECT 'operation' AS event_source, oh.id, oh.operation_type AS event_type,
+                       oh.operation_time AS event_time, oh.file_id,
+                       oh.old_value, oh.new_value, oh.operation_status AS status,
+                       oh.batch_id, oh.undo_available, oh.error_message,
+                       f.file_path, f.file_name
+                FROM operation_history oh
+                LEFT JOIN files f ON f.id = oh.file_id
+                WHERE {op_conditions}
+            """
+            parts.append(op_sql)
+            params.extend(op_params)
+
+        if mode in ('all', 'external'):
+            ev_conditions, ev_params = self._build_where(
+                table_prefix='fe', op_type=op_type, start_date=start_date,
+                end_date=end_date, path_prefix=path_prefix, is_operation=False)
+            ev_sql = f"""
+                SELECT 'external' AS event_source, fe.id, fe.event_type,
+                       fe.event_time, fe.file_id,
+                       fe.file_path AS old_value, fe.dest_path AS new_value,
+                       fe.source AS status, NULL AS batch_id,
+                       0 AS undo_available, fe.details AS error_message,
+                       fe.file_path, NULL AS file_name
+                FROM file_events fe
+                WHERE {ev_conditions}
+            """
+            parts.append(ev_sql)
+            params.extend(ev_params)
+
+        if not parts:
+            return []
+        union_sql = " UNION ALL ".join(parts) + " ORDER BY event_time DESC LIMIT ?"
+        params.append(limit)
+        return self.db.execute_query(union_sql, tuple(params)) or []
+
+    def _build_where(self, table_prefix: str, op_type: Optional[str],
+                     start_date: Optional[str], end_date: Optional[str],
+                     path_prefix: Optional[str], is_operation: bool) -> tuple:
+        conditions, params = [], []
+        if op_type:
+            type_col = 'operation_type' if is_operation else 'event_type'
+            conditions.append(f"{table_prefix}.{type_col} = ?")
+            params.append(op_type)
+        if start_date:
+            time_col = 'operation_time' if is_operation else 'event_time'
+            conditions.append(f"{table_prefix}.{time_col} >= ?")
+            params.append(start_date)
+        if end_date:
+            time_col = 'operation_time' if is_operation else 'event_time'
+            conditions.append(f"{table_prefix}.{time_col} <= ?")
+            params.append(end_date)
+        if path_prefix:
+            if is_operation:
+                conditions.append("f.file_path LIKE ?")
+            else:
+                conditions.append(f"{table_prefix}.file_path LIKE ?")
+            params.append(path_prefix + '%')
+        where = " AND ".join(conditions) if conditions else "1=1"
+        return where, params
+
+
+class WorkspaceDAO:
+    """批次6 工作区配置表操作（workspaces）。"""
+
+    def __init__(self, db_manager=None):
+        self.db = db_manager if db_manager is not None else _ensure_db()
+
+    def create(self, name: str, root_path: str, description: str = '',
+               rule_scope: str = 'all', tag_scope: str = 'all',
+               ai_allowed: bool = True) -> int:
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        return self.db.execute_insert(
+            "INSERT INTO workspaces (name, root_path, description, is_active, "
+            "rule_scope, tag_scope, ai_allowed, create_time, update_time) "
+            "VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)",
+            (name, root_path, description, rule_scope, tag_scope,
+             1 if ai_allowed else 0, now, now))
+
+    def get_all(self, only_active: bool = False) -> list:
+        if only_active:
+            return self.db.execute_query(
+                "SELECT * FROM workspaces WHERE is_active = 1 ORDER BY name") or []
+        return self.db.execute_query("SELECT * FROM workspaces ORDER BY name") or []
+
+    def get_by_id(self, ws_id: int) -> Optional[dict]:
+        return self.db.execute_one("SELECT * FROM workspaces WHERE id = ?", (ws_id,))
+
+    def get_by_path(self, path: str) -> Optional[dict]:
+        """找到包含该路径的最深工作区。"""
+        rows = self.db.execute_query(
+            "SELECT * FROM workspaces WHERE is_active = 1 ORDER BY length(root_path) DESC") or []
+        path_norm = path.replace('\\', '/').rstrip('/') + '/'
+        for row in rows:
+            rp = row['root_path'].replace('\\', '/').rstrip('/') + '/'
+            if path_norm.startswith(rp):
+                return row
+        return None
+
+    def update(self, ws_id: int, **fields) -> int:
+        if not fields:
+            return 0
+        fields['update_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        params = list(fields.values()) + [ws_id]
+        return self.db.execute_update(
+            f"UPDATE workspaces SET {set_clause} WHERE id = ?", tuple(params))
+
+    def delete(self, ws_id: int) -> int:
+        return self.db.execute_update("DELETE FROM workspaces WHERE id = ?", (ws_id,))
+
+
+class ArchivePackageDAO:
+    """批次6 归档包表操作（archive_packages）。"""
+
+    def __init__(self, db_manager=None):
+        self.db = db_manager if db_manager is not None else _ensure_db()
+
+    def create(self, package_name: str, archive_path: str,
+               item_count: int = 0, total_size: int = 0,
+               status: str = 'creating', manifest: str = '') -> int:
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        return self.db.execute_insert(
+            "INSERT INTO archive_packages (package_name, archive_path, item_count, "
+            "total_size, status, manifest, create_time) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (package_name, archive_path, item_count, total_size, status, manifest, now))
+
+    def update_status(self, pkg_id: int, status: str,
+                      checksum: Optional[str] = None,
+                      error_message: Optional[str] = None) -> int:
+        fields = {'status': status}
+        if checksum is not None:
+            fields['checksum'] = checksum
+        if error_message is not None:
+            fields['error_message'] = error_message
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        params = list(fields.values()) + [pkg_id]
+        return self.db.execute_update(
+            f"UPDATE archive_packages SET {set_clause} WHERE id = ?", tuple(params))
+
+    def get_all(self, status: Optional[str] = None) -> list:
+        if status:
+            return self.db.execute_query(
+                "SELECT * FROM archive_packages WHERE status = ? ORDER BY create_time DESC",
+                (status,)) or []
+        return self.db.execute_query(
+            "SELECT * FROM archive_packages ORDER BY create_time DESC") or []
+
+    def get_by_id(self, pkg_id: int) -> Optional[dict]:
+        return self.db.execute_one("SELECT * FROM archive_packages WHERE id = ?", (pkg_id,))
+
+    def delete(self, pkg_id: int) -> int:
+        return self.db.execute_update("DELETE FROM archive_packages WHERE id = ?", (pkg_id,))

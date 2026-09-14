@@ -60,6 +60,17 @@ class AILayer:
         self._init_backend()
         self._initialized = True
 
+    def _send(self, messages, **kwargs):
+        """统一发送入口：PII 脱敏后转发后端。"""
+        try:
+            if self.privacy.get_config().get('pii_masking', True):
+                for m in messages:
+                    if isinstance(m.get('content'), str):
+                        m['content'] = self.privacy.mask_pii(m['content'])
+        except Exception as e:
+            logger.warning(f"PII 脱敏跳过: {e}")
+        return self._send(messages, **kwargs)
+
     def _log_call(self, call_type: str, result: Optional[AIResult] = None,
                   file_count: int = 0, file_paths: Optional[list[str]] = None,
                   success: bool = True, error_msg: str = ""):
@@ -238,7 +249,7 @@ class AILayer:
                     return params, "rules"
 
                 messages = build_search_messages(query)
-                result = self._backend.chat(messages, max_tokens=300, temperature=0.05)
+                result = self._send(messages, max_tokens=300, temperature=0.05)
 
                 safe_out, reason_out = OutputValidator.check_dangerous(result.content)
                 if not safe_out:
@@ -334,7 +345,7 @@ class AILayer:
                 time_range=time_range,
                 largest_file=largest_file,
             )
-            result = self._backend.chat(messages, max_tokens=300, temperature=0.3)
+            result = self._send(messages, max_tokens=300, temperature=0.3)
             self._log_call("summarize", result=result, file_count=len(files))
             return ResponseParser.extract_plain_text(result.content)
 
@@ -363,7 +374,7 @@ class AILayer:
 
         try:
             messages = build_qa_messages(search_summary, question)
-            result = self._backend.chat(messages, max_tokens=400, temperature=0.3)
+            result = self._send(messages, max_tokens=400, temperature=0.3)
             return ResponseParser.extract_plain_text(result.content)
         except Exception as e:
             logger.warning(f"AI 问答失败: {e}")
@@ -389,7 +400,7 @@ class AILayer:
 
         try:
             messages = build_file_describe_messages(file_record, extra_metadata)
-            result = self._backend.chat(messages, max_tokens=300, temperature=0.3)
+            result = self._send(messages, max_tokens=300, temperature=0.3)
             return ResponseParser.extract_plain_text(result.content)
         except Exception as e:
             logger.warning(f"AI 文件描述失败: {e}")
@@ -408,7 +419,7 @@ class AILayer:
         if self.enabled:
             try:
                 messages = build_tag_messages(file_record)
-                result = self._backend.chat(messages, max_tokens=300, temperature=0.1)
+                result = self._send(messages, max_tokens=300, temperature=0.1)
 
                 safe, reason = OutputValidator.check_dangerous(result.content)
                 if not safe:
@@ -444,7 +455,7 @@ class AILayer:
 
         try:
             messages = build_intent_explanation_messages(query)
-            result = self._backend.chat(messages, max_tokens=100, temperature=0.3)
+            result = self._send(messages, max_tokens=100, temperature=0.3)
             text = ResponseParser.extract_plain_text(result.content)
             return text if text else None
         except Exception as e:
@@ -495,7 +506,7 @@ class AILayer:
                 top_dirs=top_dirs,
                 monthly_trend=monthly_trend,
             )
-            result = self._backend.chat(messages, max_tokens=400, temperature=0.3)
+            result = self._send(messages, max_tokens=400, temperature=0.3)
             return ResponseParser.extract_plain_text(result.content)
         except Exception as e:
             logger.warning(f"AI 仪表盘洞察失败: {e}")
@@ -515,7 +526,7 @@ class AILayer:
             return None
         try:
             from core.ai_prompts import build_folder_profile_messages
-            result = self._backend.chat(
+            result = self._send(
                 build_folder_profile_messages(profile_text),
                 max_tokens=400, temperature=0.3)
             return ResponseParser.extract_plain_text(result.content)
@@ -534,7 +545,7 @@ class AILayer:
 
         try:
             messages = build_cleanup_advice_messages(categories_text)
-            result = self._backend.chat(messages, max_tokens=400, temperature=0.3)
+            result = self._send(messages, max_tokens=400, temperature=0.3)
             return ResponseParser.extract_plain_text(result.content)
         except Exception as e:
             logger.warning(f"AI 清理建议增强失败: {e}")
@@ -559,7 +570,7 @@ class AILayer:
             messages = build_rename_suggestion_messages(
                 file_name, file_path, file_type, file_size, modify_time
             )
-            result = self._backend.chat(messages, max_tokens=300, temperature=0.3)
+            result = self._send(messages, max_tokens=300, temperature=0.3)
             suggestions = ResponseParser.parse_tags(result.content)
             # parse_tags 返回 [(name, confidence), ...]，取 name 部分
             if suggestions:
@@ -604,7 +615,7 @@ class AILayer:
                 modify_time=modify_time,
                 file_content=file_content,
             )
-            result = self._backend.chat(messages, max_tokens=500, temperature=0.3)
+            result = self._send(messages, max_tokens=500, temperature=0.3)
             return ResponseParser.extract_plain_text(result.content)
         except Exception as e:
             logger.warning(f"AI 文件内容摘要失败: {e}")
@@ -643,7 +654,7 @@ class AILayer:
                             f"请选出与用户意图最相关的文件（不超过8个），按以下JSON格式输出:\n"
                             f'{{"relevant": [{{"index": 1, "relevance": "high", "reason": "..."}}]}}'}
             ]
-            result = self._backend.chat(messages, max_tokens=500, temperature=0.2)
+            result = self._send(messages, max_tokens=500, temperature=0.2)
             parsed = ResponseParser.parse_search(result.content)
             if parsed and isinstance(parsed, dict):
                 return parsed.get('relevant', [])
@@ -668,7 +679,7 @@ class AILayer:
 
         try:
             messages = build_classify_rule_messages(dir_sample)
-            result = self._backend.chat(messages, max_tokens=600, temperature=0.3)
+            result = self._send(messages, max_tokens=600, temperature=0.3)
             parsed = ResponseParser.parse_search(result.content)
             if parsed and isinstance(parsed, dict):
                 return parsed.get('suggestions', [])
@@ -700,7 +711,7 @@ class AILayer:
             return None
 
         try:
-            return self._backend.chat(
+            return self._send(
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
@@ -733,6 +744,14 @@ class AILayer:
             return
 
         try:
+            # 流式入口同样做 PII 脱敏（复用 _send 的掩码逻辑，但走流式后端）
+            try:
+                if self.privacy.get_config().get('pii_masking', True):
+                    for m in messages:
+                        if isinstance(m.get('content'), str):
+                            m['content'] = self.privacy.mask_pii(m['content'])
+            except Exception as e:
+                logger.warning(f"PII 脱敏跳过: {e}")
             yield from self._backend.chat_stream(
                 messages=messages,
                 max_tokens=max_tokens,
@@ -842,7 +861,7 @@ class AILayer:
         try:
             from core.ai_prompts import build_organize_plan_messages
             messages = build_organize_plan_messages(user_request, files)
-            result = self._backend.chat(
+            result = self._send(
                 messages, max_tokens=2000, temperature=0.2
             )
 

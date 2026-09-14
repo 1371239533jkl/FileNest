@@ -159,6 +159,11 @@ class ScanTab(QWidget):
         self.health_btn.clicked.connect(self._check_index_health)
         btn_layout.addWidget(self.health_btn)
 
+        self.archive_btn = QPushButton('📦 归档工具')
+        self.archive_btn.setToolTip('一键打包文件/文件夹为 zip，含清单和校验值')
+        self.archive_btn.clicked.connect(self._show_archive_dialog)
+        btn_layout.addWidget(self.archive_btn)
+
         btn_layout.addStretch()
 
         self.stats_label = QLabel("")
@@ -335,6 +340,12 @@ class ScanTab(QWidget):
         except Exception as exc:
             logger.exception('索引修复失败')
             QMessageBox.critical(self, '索引修复', f'修复失败: {exc}')
+
+    def _show_archive_dialog(self):
+        """打开一键归档包对话框。"""
+        from ui.archive_dialog import ArchiveDialog
+        dlg = ArchiveDialog(self)
+        dlg.exec()
 
     def _on_cleanup_ready(self, report):
         self._finish_cleanup_analysis()

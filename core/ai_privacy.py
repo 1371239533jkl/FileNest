@@ -11,12 +11,37 @@ ponytail: 最小实现。
 
 import json
 import os
+import re
 import sqlite3
 import time
 from typing import Optional
 
 from config import DB_PATH
 from utils.logger import logger
+
+# ── PII 脱敏正则 ──
+_PII_PATTERNS = [
+    # 邮箱
+    (re.compile(r'[\w.+-]+@[\w-]+\.[\w.-]+'), '<邮箱>'),
+    # 手机号（11 位，1 开头；前后非数字防误伤长数字）
+    (re.compile(r'(?<!\d)1[3-9]\d{9}(?!\d)'), '<手机号>'),
+    # 身份证号（18 位含校验位）
+    (re.compile(r'(?<!\d)\d{17}[\dXx](?!\d)'), '<身份证>'),
+]
+
+
+def mask_pii_text(text: str) -> str:
+    """PII 脱敏核心逻辑（模块级函数，便于独立测试）。
+
+    ponytail: 只脱敏邮箱/手机号/身份证三类明确 PII，不脱敏文件路径
+    （路径是文件管理器的核心语义，脱敏会破坏 AI 搜索与问答的正确性）。
+    文件名中含 PII 的极端场景接受泄漏，开关可关。
+    """
+    if not text:
+        return text
+    for pattern, placeholder in _PII_PATTERNS:
+        text = pattern.sub(placeholder, text)
+    return text
 
 _CONFIG_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _PRIVACY_CONFIG_FILE = os.path.join(_CONFIG_DIR, "ai_privacy.json")
@@ -53,6 +78,7 @@ def _default_config() -> dict:
         "allow_local_only": False,
         "log_enabled": True,
         "max_files_per_call": 50,
+        "pii_masking": True,
     }
 
 
@@ -101,6 +127,18 @@ class AIPrivacy:
 
     def get_config(self) -> dict:
         return dict(self._config)
+
+    def set_config_value(self, key: str, value):
+        self._config[key] = value
+        self._save_config()
+
+    # ── PII 字段脱敏 ──
+
+    def mask_pii(self, text: str) -> str:
+        """对发送给 AI 的文本做 PII 脱敏（受 pii_masking 开关控制）。"""
+        if not text or not self._config.get('pii_masking', True):
+            return text
+        return mask_pii_text(text)
 
     # ── 目录级禁止 ──
 

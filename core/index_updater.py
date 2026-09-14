@@ -9,7 +9,7 @@ import os
 from typing import List, Optional
 
 from database.db_manager import db
-from database.models import FileDAO
+from database.models import FileDAO, FileEventDAO
 from utils.logger import logger
 
 _MAX_RETRIES = 2  # 每个事件最多重试次数（不含首次）
@@ -37,13 +37,32 @@ class IncrementalIndexUpdater:
     纯逻辑、无 Qt 依赖，可在任何线程调用；调用方负责线程调度。
     """
 
-    def __init__(self, file_dao: Optional[FileDAO] = None):
+    def __init__(self, file_dao: Optional[FileDAO] = None,
+                 event_dao: Optional[FileEventDAO] = None):
         self.file_dao = file_dao or FileDAO(db)
+        self.event_dao = event_dao or FileEventDAO(db)
 
     def apply(self, events: list) -> dict:
         """处理一批事件，返回统计 {'applied', 'failed', 'errors': [...]}。"""
         result = {'applied': 0, 'failed': 0, 'errors': []}
-        for ev in merge_events(events):
+        merged = merge_events(events)
+        # 记录到 file_events 时间线（失败不影响主流程）
+        try:
+            event_records = []
+            for ev in merged:
+                rec = {
+                    'event_type': ev.event_type,
+                    'file_path': ev.path,
+                    'source': 'watcher',
+                }
+                if hasattr(ev, 'dest_path') and ev.dest_path:
+                    rec['dest_path'] = ev.dest_path
+                event_records.append(rec)
+            self.event_dao.insert_batch(event_records)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('记录文件事件到时间线失败: %s', exc)
+
+        for ev in merged:
             ok = False
             last_err = None
             for attempt in range(_MAX_RETRIES + 1):
