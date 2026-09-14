@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QLineEdit, QComboBox, QPushButton,
     QListWidget, QStackedWidget, QGroupBox,
-    QMessageBox, QSpinBox, QDoubleSpinBox, QWidget,
+    QMessageBox, QSpinBox, QDoubleSpinBox, QWidget, QCheckBox,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QSettings
 
@@ -278,6 +278,13 @@ class AiSettingsDialog(QDialog):
         dest_layout.addWidget(dest_details)
 
         layout.addWidget(dest_group)
+
+        # PII 脱敏开关
+        mask_check = QCheckBox("脱敏敏感字段（邮箱 / 手机号 / 身份证号）后再发送给 AI")
+        mask_check.setChecked(privacy.get_config().get('pii_masking', True))
+        mask_check.toggled.connect(
+            lambda on: privacy.set_config_value('pii_masking', bool(on)))
+        layout.addWidget(mask_check)
 
         # 禁止目录
         dir_group = QGroupBox("🚫 禁止 AI 访问的目录")

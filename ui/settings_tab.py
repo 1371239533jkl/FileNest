@@ -32,7 +32,7 @@ class SettingsTab(QWidget):
         # 左侧分类列表
         self.category_list = QListWidget()
         self.category_list.setFixedWidth(130)
-        self.category_list.addItems(["通用设置", "扫描设置", "重命名模板", "去重策略", "AI 模型"])
+        self.category_list.addItems(["通用设置", "扫描设置", "重命名模板", "去重策略", "AI 模型", "工作区配置"])
         self.category_list.currentRowChanged.connect(self._on_category_changed)
         layout.addWidget(self.category_list)
 
@@ -43,6 +43,7 @@ class SettingsTab(QWidget):
         self.stack.addWidget(self._create_rename_page())
         self.stack.addWidget(self._create_dedup_page())
         self.stack.addWidget(self._create_ai_page())
+        self.stack.addWidget(self._create_workspace_page())
         layout.addWidget(self.stack, 1)
 
         self.category_list.setCurrentRow(0)
@@ -331,6 +332,38 @@ class SettingsTab(QWidget):
         layout.addLayout(btn_row)
         layout.addStretch()
         return page
+
+    def _create_workspace_page(self):
+        """工作区配置页面"""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        title = QLabel("工作区配置")
+        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #cba6f7;")
+        layout.addWidget(title)
+
+        desc = QLabel(
+            "工作区用于按目录隔离规则、标签和 AI 权限。\n"
+            "每个工作区对应一个根目录，可独立配置作用范围。")
+        desc.setStyleSheet("color: #a6adc8; margin: 8px 0;")
+        layout.addWidget(desc)
+
+        btn_row = QHBoxLayout()
+        open_mgr_btn = QPushButton("🗂️ 管理工作区")
+        open_mgr_btn.setObjectName("primaryBtn")
+        open_mgr_btn.setFixedHeight(36)
+        open_mgr_btn.clicked.connect(self._open_workspace_dialog)
+        btn_row.addWidget(open_mgr_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        layout.addStretch()
+        return page
+
+    def _open_workspace_dialog(self):
+        from ui.workspace_dialog import WorkspaceDialog
+        dlg = WorkspaceDialog(self)
+        dlg.exec()
 
     def _open_ai_settings_dialog(self):
         """打开 AI 模型管理对话框"""

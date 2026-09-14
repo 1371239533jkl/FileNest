@@ -4,7 +4,7 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QTableWidget, QTableWidgetItem, QComboBox, QMessageBox,
-    QHeaderView, QDateEdit, QFileDialog
+    QHeaderView, QDateEdit, QFileDialog, QLineEdit
 )
 from PyQt6.QtCore import Qt, QDate
 from PyQt6.QtGui import QColor, QBrush
@@ -12,6 +12,7 @@ from PyQt6.QtGui import QColor, QBrush
 import csv
 
 from core import OperationHistoryManager
+from database.models import TimelineDAO
 from utils.logger import logger
 from ui.empty_state import create_empty_state
 
@@ -24,6 +25,9 @@ OPERATION_NAMES = {
     'classify': '  分类',
     'dedup': '  去重',
     'restore': '  还原',
+    'created': '  新建文件',
+    'modified': '  修改文件',
+    'moved': '  移动文件',
 }
 
 OPERATION_ICONS = {
@@ -34,6 +38,9 @@ OPERATION_ICONS = {
     'classify': '🏷️',
     'dedup': '🔀',
     'restore': '♻️',
+    'created': '✨',
+    'modified': '✏️',
+    'moved': '➡️',
 }
 
 STATUS_NAMES = {
@@ -47,12 +54,26 @@ class HistoryTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.history_mgr = OperationHistoryManager()
+        self.timeline_dao = TimelineDAO()
+        self._view_mode = 'operations'  # operations | all | external
         self._init_ui()
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(8)
+
+        # 视图切换
+        view_layout = QHBoxLayout()
+        view_layout.addWidget(QLabel("视图:"))
+        self.view_combo = QComboBox()
+        self.view_combo.addItem("操作历史", "operations")
+        self.view_combo.addItem("全部时间线", "all")
+        self.view_combo.addItem("仅外部变化", "external")
+        self.view_combo.currentIndexChanged.connect(self._on_view_changed)
+        view_layout.addWidget(self.view_combo)
+        view_layout.addStretch(1)
+        layout.addLayout(view_layout)
 
         # 筛选工具栏
         filter_layout = QHBoxLayout()
@@ -78,6 +99,13 @@ class HistoryTab(QWidget):
         self.end_date.setDate(QDate.currentDate())
         self.end_date.setDisplayFormat("yyyy-MM-dd")
         filter_layout.addWidget(self.end_date)
+
+        filter_layout.addWidget(QLabel("目录:"))
+        self.path_filter = QLineEdit()
+        self.path_filter.setPlaceholderText("按目录前缀筛选，留空为全部")
+        self.path_filter.setFixedWidth(200)
+        self.path_filter.returnPressed.connect(self._on_filter_changed)
+        filter_layout.addWidget(self.path_filter)
 
         filter_btn = QPushButton("筛选")
         filter_btn.setObjectName("primaryBtn")
@@ -142,19 +170,34 @@ class HistoryTab(QWidget):
     def _on_filter_changed(self):
         self._load_history()
 
+    def _on_view_changed(self):
+        self._view_mode = self.view_combo.currentData() or 'operations'
+        self._load_history()
+
     def _load_history(self):
         try:
             op_type = self.type_combo.currentData()
             start = self.start_date.date().toString("yyyy-MM-dd 00:00:00")
             end = self.end_date.date().toString("yyyy-MM-dd 23:59:59")
+            path_prefix = self.path_filter.text().strip() or None
 
-            records = self.history_mgr.search_operations(
-                op_type=op_type, start_date=start, end_date=end)
+            if self._view_mode == 'operations':
+                records = self.history_mgr.search_operations(
+                    op_type=op_type, start_date=start, end_date=end)
+                # 加 event_source 标记以统一处理
+                for r in records:
+                    r['event_source'] = 'operation'
+            else:
+                records = self.timeline_dao.get_combined(
+                    mode=self._view_mode, op_type=op_type,
+                    start_date=start, end_date=end,
+                    path_prefix=path_prefix, limit=200)
+
             self._populate_table(records)
         except Exception as e:
-            logger.error(f"加载操作历史失败: {e}")
+            logger.error(f"加载时间线失败: {e}")
             self.history_table.setVisible(False)
-            self._empty_state.show_error(f"无法读取操作历史：{e}")
+            self._empty_state.show_error(f"无法读取：{e}")
 
     def _populate_table(self, records):
         self.history_table.setRowCount(len(records))
@@ -173,12 +216,20 @@ class HistoryTab(QWidget):
                 batch_counts[batch_id] = batch_counts.get(batch_id, 0) + 1
 
         for i, r in enumerate(records):
-            time_item = QTableWidgetItem(str(r['operation_time']) if r['operation_time'] else "")
+            is_external = r.get('event_source') == 'external'
+            ev_time = r.get('event_time') or r.get('operation_time') or ''
+            ev_type = r.get('event_type') or r.get('operation_type') or ''
+            ev_status = r.get('status') or r.get('operation_status') or ''
+
+            time_item = QTableWidgetItem(str(ev_time))
             time_item.setData(Qt.ItemDataRole.UserRole, r['id'])
             self.history_table.setItem(i, 0, time_item)
-            op_icon = OPERATION_ICONS.get(r['operation_type'], ' ')
-            self.history_table.setItem(i, 1, QTableWidgetItem(
-                op_icon + " " + OPERATION_NAMES.get(r['operation_type'], r['operation_type'])))
+
+            op_icon = OPERATION_ICONS.get(ev_type, ' ')
+            op_name = OPERATION_NAMES.get(ev_type, ev_type)
+            if is_external:
+                op_name = "［外部］" + op_name
+            self.history_table.setItem(i, 1, QTableWidgetItem(op_icon + " " + op_name))
             self.history_table.setItem(i, 2, QTableWidgetItem(
                 str(r.get('file_id', ''))))
 
@@ -190,14 +241,19 @@ class HistoryTab(QWidget):
             self.history_table.setItem(i, 4, QTableWidgetItem(
                 new_val if len(new_val) < 50 else "..." + new_val[-47:]))
 
-            status = STATUS_NAMES.get(r['operation_status'], r['operation_status'])
-            status_item = QTableWidgetItem(status)
-            if r['operation_status'] == 'failed':
-                status_item.setForeground(QBrush(QColor('#f38ba8')))
-            elif r['operation_status'] == 'completed':
-                status_item.setForeground(QBrush(QColor('#a6e3a1')))
-            elif r['operation_status'] == 'undone':
-                status_item.setForeground(QBrush(QColor('#f9e2af')))
+            if is_external:
+                status_text = '外部变化'
+                status_item = QTableWidgetItem(status_text)
+                status_item.setForeground(QBrush(QColor('#89b4fa')))
+            else:
+                status_text = STATUS_NAMES.get(ev_status, ev_status)
+                status_item = QTableWidgetItem(status_text)
+                if ev_status == 'failed':
+                    status_item.setForeground(QBrush(QColor('#f38ba8')))
+                elif ev_status == 'completed':
+                    status_item.setForeground(QBrush(QColor('#a6e3a1')))
+                elif ev_status == 'undone':
+                    status_item.setForeground(QBrush(QColor('#f9e2af')))
             if r.get('error_message'):
                 status_item.setToolTip(r['error_message'])
             self.history_table.setItem(i, 5, status_item)
@@ -208,8 +264,8 @@ class HistoryTab(QWidget):
             batch_item.setData(Qt.ItemDataRole.UserRole, batch_id)
             self.history_table.setItem(i, 6, batch_item)
 
-            # 撤销按钮
-            if r.get('undo_available') and r['operation_status'] == 'completed':
+            # 撤销按钮（仅应用内操作且可撤销）
+            if not is_external and r.get('undo_available') and ev_status == 'completed':
                 undo_btn = QPushButton("撤销")
                 undo_btn.setFixedSize(56, 24)
                 undo_btn.setStyleSheet(

@@ -153,6 +153,55 @@ class DBManager:
         except Exception as e:
             logger.warning(f"批次5 表迁移跳过: {e}")
 
+    def _migrate_batch6_tables(self, conn):
+        """批次6 工作流扩展：外部文件事件表 + 工作区表 + 归档包表（幂等）。"""
+        try:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS file_events (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_type  TEXT    NOT NULL,
+                    file_path   TEXT    NOT NULL,
+                    dest_path   TEXT,
+                    file_id     INTEGER,
+                    event_time  TEXT    NOT NULL,
+                    source      TEXT    DEFAULT 'watcher',
+                    details     TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_fe_time ON file_events(event_time);
+                CREATE INDEX IF NOT EXISTS idx_fe_type ON file_events(event_type);
+                CREATE INDEX IF NOT EXISTS idx_fe_path ON file_events(file_path);
+
+                CREATE TABLE IF NOT EXISTS workspaces (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name            TEXT    NOT NULL UNIQUE,
+                    root_path       TEXT    NOT NULL UNIQUE,
+                    description     TEXT,
+                    is_active       INTEGER DEFAULT 1,
+                    rule_scope      TEXT    DEFAULT 'all',
+                    tag_scope       TEXT    DEFAULT 'all',
+                    ai_allowed      INTEGER DEFAULT 1,
+                    create_time     TEXT    NOT NULL,
+                    update_time     TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS archive_packages (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    package_name    TEXT    NOT NULL,
+                    archive_path    TEXT    NOT NULL UNIQUE,
+                    item_count      INTEGER DEFAULT 0,
+                    total_size      INTEGER DEFAULT 0,
+                    checksum        TEXT,
+                    status          TEXT    DEFAULT 'created',
+                    manifest        TEXT,
+                    create_time     TEXT    NOT NULL,
+                    error_message   TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_archive_status ON archive_packages(status);
+            """)
+            conn.commit()
+        except Exception as e:
+            logger.warning(f"批次6 表迁移跳过: {e}")
+
     def _migrate_cleanup_tables(self, conn):
         """创建清理中心配套表（幂等）。"""
         conn.executescript("""
@@ -335,6 +384,9 @@ class DBManager:
 
         # === 批次5 内容理解表（幂等）===
         self._migrate_batch5_tables(conn)
+
+        # === 批次6 工作流扩展表（幂等）===
+        self._migrate_batch6_tables(conn)
 
         # === FTS5 触发器（幂等：DROP IF EXISTS 后重建）===
         conn.executescript("""
