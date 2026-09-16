@@ -212,6 +212,10 @@ class DashboardTab(QWidget):
         profile_btn = QPushButton("📂 目录画像")
         profile_btn.clicked.connect(self._open_folder_profile)
         self._grid.addWidget(profile_btn)
+        # P2-05: 知识图谱入口
+        graph_btn = QPushButton("🕸 知识图谱")
+        graph_btn.clicked.connect(self._open_knowledge_graph)
+        self._grid.addWidget(graph_btn)
         self._grid.addStretch()
 
         scroll.setWidget(self._content)
@@ -481,6 +485,11 @@ class DashboardTab(QWidget):
         else:
             self.insight_label.setText("AI 洞察暂时不可用，其他文件管理功能不受影响。")
         logger.warning(f"仪表盘 AI 洞察失败: {err}")
+
+    def _open_knowledge_graph(self):
+        """P2-05: 打开知识图谱对话框"""
+        from ui.graph_dialog import KnowledgeGraphDialog
+        KnowledgeGraphDialog(self).exec()
 
     def _open_folder_profile(self):
         """P1-09: 打开目录画像对话框"""

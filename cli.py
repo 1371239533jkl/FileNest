@@ -177,8 +177,15 @@ def main():
     parser.add_argument('--db', help='指定数据库路径（默认使用 config.py 配置）')
     sub = parser.add_subparsers(dest='cmd', required=True)
 
+    # 公共参数：允许 --pretty/--db 出现在子命令之后（如 `search ... --pretty`）。
+    # ponytail: default=SUPPRESS 避免子 parser 未提供时用默认值覆盖顶层的值
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument('--pretty', action='store_true',
+                        default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    common.add_argument('--db', default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+
     # search
-    p_search = sub.add_parser('search', help='搜索文件')
+    p_search = sub.add_parser('search', parents=[common], help='搜索文件')
     p_search.add_argument('--name', help='文件名关键词（支持全文检索）')
     p_search.add_argument('--type', help='文件类型：document/image/video/audio/archive/code/other')
     p_search.add_argument('--ext', help='扩展名过滤，如 .pdf')
@@ -188,28 +195,28 @@ def main():
     p_search.set_defaults(func=cmd_search)
 
     # scan
-    p_scan = sub.add_parser('scan', help='扫描目录并索引')
+    p_scan = sub.add_parser('scan', parents=[common], help='扫描目录并索引')
     p_scan.add_argument('directory', help='要扫描的目录路径')
     p_scan.add_argument('--recursive', '-r', action='store_true', help='递归扫描子目录')
     p_scan.set_defaults(func=cmd_scan)
 
     # tag
-    p_tag = sub.add_parser('tag', help='标签管理')
+    p_tag = sub.add_parser('tag', parents=[common], help='标签管理')
     tag_sub = p_tag.add_subparsers(dest='tag_cmd', required=True)
 
-    p_tag_add = tag_sub.add_parser('add', help='给文件添加标签')
+    p_tag_add = tag_sub.add_parser('add', parents=[common], help='给文件添加标签')
     p_tag_add.add_argument('--file-id', type=int, help='文件 ID')
     p_tag_add.add_argument('--path', help='文件路径（二选一）')
     p_tag_add.add_argument('--tag', required=True, help='标签名')
     p_tag_add.set_defaults(func=cmd_tag_add)
 
-    p_tag_rm = tag_sub.add_parser('remove', help='移除文件标签')
+    p_tag_rm = tag_sub.add_parser('remove', parents=[common], help='移除文件标签')
     p_tag_rm.add_argument('--file-id', type=int, help='文件 ID')
     p_tag_rm.add_argument('--path', help='文件路径（二选一）')
     p_tag_rm.add_argument('--tag', required=True, help='标签名')
     p_tag_rm.set_defaults(func=cmd_tag_remove)
 
-    p_tag_list = tag_sub.add_parser('list', help='列出标签')
+    p_tag_list = tag_sub.add_parser('list', parents=[common], help='列出标签')
     p_tag_list.add_argument('--file-id', type=int, help='指定文件的标签')
     p_tag_list.set_defaults(func=cmd_tag_list)
 

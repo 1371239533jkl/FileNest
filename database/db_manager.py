@@ -202,6 +202,28 @@ class DBManager:
         except Exception as e:
             logger.warning(f"批次6 表迁移跳过: {e}")
 
+    def _migrate_lifecycle_tables(self, conn):
+        """批次7 P2-07：生命周期策略表（幂等）。"""
+        try:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS lifecycle_policies (
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name           TEXT    NOT NULL,
+                    enabled        INTEGER NOT NULL DEFAULT 1,
+                    target_type    TEXT    NOT NULL DEFAULT 'path',
+                    target_value   TEXT    NOT NULL,
+                    days_threshold INTEGER NOT NULL DEFAULT 30,
+                    action         TEXT    NOT NULL DEFAULT 'remind',
+                    archive_dir    TEXT,
+                    last_run_at    TEXT,
+                    create_time    TEXT    NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_lp_enabled ON lifecycle_policies(enabled);
+            """)
+            conn.commit()
+        except Exception as e:
+            logger.warning(f"生命周期表迁移跳过: {e}")
+
     def _migrate_cleanup_tables(self, conn):
         """创建清理中心配套表（幂等）。"""
         conn.executescript("""
@@ -387,6 +409,9 @@ class DBManager:
 
         # === 批次6 工作流扩展表（幂等）===
         self._migrate_batch6_tables(conn)
+
+        # === 批次7 生命周期策略表（幂等）===
+        self._migrate_lifecycle_tables(conn)
 
         # === FTS5 触发器（幂等：DROP IF EXISTS 后重建）===
         conn.executescript("""

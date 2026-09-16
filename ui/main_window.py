@@ -326,6 +326,9 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("就绪")
         self.setStatusBar(self.status_bar)
 
+        # ── 生命周期策略每日提醒（批次7 P2-07）──
+        self._setup_lifecycle_timer()
+
         # ── 全局快捷键 ──
         self._undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
         self._undo_shortcut.activated.connect(self._on_undo_shortcut)
@@ -376,6 +379,28 @@ class MainWindow(QMainWindow):
         """切换到指定导航页"""
         if 0 <= index < self.nav_list.count():
             self.nav_list.setCurrentRow(index)
+
+    def _setup_lifecycle_timer(self):
+        """生命周期策略：启动后 30s 首查，之后每 24h 检查一次（仅提醒动作弹状态栏）。"""
+        self._lifecycle_timer = QTimer(self)
+        self._lifecycle_timer.setInterval(24 * 3600 * 1000)
+        self._lifecycle_timer.timeout.connect(self._on_lifecycle_check)
+        QTimer.singleShot(30_000, self._on_lifecycle_check)
+        self._lifecycle_timer.start()
+
+    def _on_lifecycle_check(self):
+        try:
+            from core.lifecycle_service import LifecycleService
+            results = LifecycleService().check_all()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"生命周期定时检查失败: {e}")
+            return
+        remind_hits = [r for r in results
+                       if r['policy'].get('action') == 'remind' and r['match_count']]
+        if remind_hits:
+            names = '、'.join(f"「{r['policy']['name']}」{r['match_count']} 个"
+                              for r in remind_hits)
+            self.status_bar.showMessage(f"⏳ 生命周期提醒: {names}", 15000)
 
     def _on_undo_shortcut(self):
         """Ctrl+Z 触发当前页面的撤销操作"""

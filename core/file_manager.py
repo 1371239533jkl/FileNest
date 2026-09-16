@@ -46,9 +46,9 @@ def _restore_from_trash(trash_path: str, original_path: str) -> None:
 class FileManager:
     """文件操作管理器"""
 
-    def __init__(self):
-        self.file_dao = FileDAO(db)
-        self.history_dao = OperationHistoryDAO(db)
+    def __init__(self, file_dao=None, history_dao=None):
+        self.file_dao = file_dao or FileDAO(db)
+        self.history_dao = history_dao or OperationHistoryDAO(db)
 
     def rename_file(self, file_id: int, new_name: Optional[str] = None,
                     pattern: Optional[str] = None, batch_id: Optional[str] = None) -> Optional[int]:

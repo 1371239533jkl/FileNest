@@ -1335,3 +1335,46 @@ class ArchivePackageDAO:
 
     def delete(self, pkg_id: int) -> int:
         return self.db.execute_update("DELETE FROM archive_packages WHERE id = ?", (pkg_id,))
+
+
+class LifecyclePolicyDAO:
+    """生命周期策略 CRUD（批次7 P2-07）。"""
+
+    def __init__(self, db_manager=None):
+        self.db = db_manager if db_manager is not None else _ensure_db()
+
+    def create(self, name: str, target_type: str, target_value: str,
+               days_threshold: int = 30, action: str = 'remind',
+               archive_dir: Optional[str] = None, enabled: bool = True) -> int:
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        return self.db.execute_insert(
+            "INSERT INTO lifecycle_policies (name, enabled, target_type, target_value, "
+            "days_threshold, action, archive_dir, create_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (name, int(enabled), target_type, target_value,
+             int(days_threshold), action, archive_dir, now))
+
+    def update(self, policy_id: int, **fields) -> int:
+        if not fields:
+            return 0
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        params = list(fields.values()) + [policy_id]
+        return self.db.execute_update(
+            f"UPDATE lifecycle_policies SET {set_clause} WHERE id = ?", tuple(params))
+
+    def touch_last_run(self, policy_id: int) -> int:
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        return self.db.execute_update(
+            "UPDATE lifecycle_policies SET last_run_at = ? WHERE id = ?", (now, policy_id))
+
+    def get_all(self, enabled_only: bool = False) -> list:
+        if enabled_only:
+            return self.db.execute_query(
+                "SELECT * FROM lifecycle_policies WHERE enabled = 1 ORDER BY id") or []
+        return self.db.execute_query(
+            "SELECT * FROM lifecycle_policies ORDER BY id") or []
+
+    def get_by_id(self, policy_id: int) -> Optional[dict]:
+        return self.db.execute_one("SELECT * FROM lifecycle_policies WHERE id = ?", (policy_id,))
+
+    def delete(self, policy_id: int) -> int:
+        return self.db.execute_update("DELETE FROM lifecycle_policies WHERE id = ?", (policy_id,))

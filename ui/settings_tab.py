@@ -32,7 +32,7 @@ class SettingsTab(QWidget):
         # 左侧分类列表
         self.category_list = QListWidget()
         self.category_list.setFixedWidth(130)
-        self.category_list.addItems(["通用设置", "扫描设置", "重命名模板", "去重策略", "AI 模型", "工作区配置"])
+        self.category_list.addItems(["通用设置", "扫描设置", "重命名模板", "去重策略", "AI 模型", "工作区配置", "生命周期"])
         self.category_list.currentRowChanged.connect(self._on_category_changed)
         layout.addWidget(self.category_list)
 
@@ -44,6 +44,7 @@ class SettingsTab(QWidget):
         self.stack.addWidget(self._create_dedup_page())
         self.stack.addWidget(self._create_ai_page())
         self.stack.addWidget(self._create_workspace_page())
+        self.stack.addWidget(self._create_lifecycle_page())
         layout.addWidget(self.stack, 1)
 
         self.category_list.setCurrentRow(0)
@@ -364,6 +365,38 @@ class SettingsTab(QWidget):
         from ui.workspace_dialog import WorkspaceDialog
         dlg = WorkspaceDialog(self)
         dlg.exec()
+
+    def _create_lifecycle_page(self):
+        """生命周期策略页面（批次7 P2-07）"""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        title = QLabel("生命周期策略")
+        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #cba6f7;")
+        layout.addWidget(title)
+
+        desc = QLabel(
+            "按路径/类型/标签定义超龄文件的自动化处置：\n"
+            "🔔 提醒 / 📦 归档（打包后移入回收区）/ 🗑 移入回收区。\n"
+            "所有写操作均走回收区 + 操作历史，可撤销。")
+        desc.setStyleSheet("color: #a6adc8; margin: 8px 0;")
+        layout.addWidget(desc)
+
+        btn_row = QHBoxLayout()
+        open_btn = QPushButton("⏳ 管理生命周期策略")
+        open_btn.setObjectName("primaryBtn")
+        open_btn.setFixedHeight(36)
+        open_btn.clicked.connect(self._open_lifecycle_dialog)
+        btn_row.addWidget(open_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        layout.addStretch()
+        return page
+
+    def _open_lifecycle_dialog(self):
+        from ui.lifecycle_dialog import LifecycleDialog
+        LifecycleDialog(self).exec()
 
     def _open_ai_settings_dialog(self):
         """打开 AI 模型管理对话框"""
