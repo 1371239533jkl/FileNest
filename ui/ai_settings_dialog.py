@@ -540,18 +540,24 @@ class AiSettingsDialog(QDialog):
         self.edit_title.setText("选择一个提供商进行编辑")
 
     def _show_add_menu(self):
-        """显示添加菜单：内置模板 或 自定义"""
+        """显示添加菜单：内置模板直接平铺在一级菜单（带默认模型提示），末尾为自定义。"""
         from PyQt6.QtWidgets import QMenu
         from PyQt6.QtGui import QAction
 
         menu = QMenu(self)
 
-        # 内置模板
-        template_menu = menu.addMenu("从模板添加")
+        header = menu.addAction("从模板快速添加")
+        header.setEnabled(False)
+
         for pid, info in BUILTIN_PROVIDERS.items():
-            action = QAction(f"{info['name']}", self)
+            label = info.get('name', pid)
+            default_model = info.get('default_model', '')
+            if default_model:
+                label += f"   ·   {default_model}"
+            action = QAction(label, self)
+            action.setToolTip(info.get('base_url', ''))
             action.triggered.connect(lambda checked, p=pid: self._add_from_template(p))
-            template_menu.addAction(action)
+            menu.addAction(action)
 
         menu.addSeparator()
 
@@ -564,7 +570,7 @@ class AiSettingsDialog(QDialog):
             menu.exec(btn.mapToGlobal(btn.rect().bottomLeft()))
 
     def _add_from_template(self, provider_id: str):
-        """从内置模板添加"""
+        """从内置模板添加：base_url / 模型 / 超时已预填，只需补 API Key。"""
         p = self._config.add_builtin_template(provider_id)
         if not p:
             QMessageBox.warning(self, "错误", f"不支持的模板: {provider_id}")
@@ -577,6 +583,11 @@ class AiSettingsDialog(QDialog):
             if prov.provider_id == provider_id:
                 self.provider_list.setCurrentRow(i)
                 break
+
+        # 引导用户补齐唯一必需项（Key），其余字段模板已填好
+        self.edit_title.setText(
+            f"已添加「{p.name}」— 请填写 API Key 后保存，再点击「设为当前」")
+        self.api_key_input.setFocus()
 
     def _add_custom(self):
         """添加自定义空白提供商"""

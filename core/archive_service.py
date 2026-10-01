@@ -91,9 +91,16 @@ class ArchiveService:
             return {'success': False, 'error': f'输出目录不存在: {output_dir}'}
 
         name = package_name or f"archive_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        # 防路径穿越：剥离任何目录成分（如 "../x"），仅保留文件名
+        name = os.path.basename(name)
         if not name.endswith('.zip'):
             name += '.zip'
         archive_path = os.path.join(output_dir, name)
+        # 双保险：最终路径必须落在 output_dir 内
+        if os.path.commonpath([os.path.realpath(output_dir),
+                               os.path.realpath(archive_path)]) \
+                != os.path.realpath(output_dir):
+            return {'success': False, 'error': f'非法的归档包名: {package_name}'}
 
         # 空间预检查（按 1.1 倍估算，压缩率未知保守估算）
         items = _walk_items(source_paths)

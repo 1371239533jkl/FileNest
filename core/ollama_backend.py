@@ -30,7 +30,7 @@ class OllamaBackend(OpenAICompatibleBackend):
     """Ollama 本地模型后端 —— 兼容 OpenAI API 协议。"""
 
     def __init__(self, model: str, base_url: str = DEFAULT_OLLAMA_URL,
-                 timeout: float = 60.0):
+                 timeout: float = 60.0, sanitize=None):
         # Ollama 不需要 api_key，但 OpenAICompatibleBackend 要求传，填占位符
         # 实际请求时 Authorization header 会被带上 "Bearer ollama"，Ollama 会忽略
         super().__init__(
@@ -38,6 +38,7 @@ class OllamaBackend(OpenAICompatibleBackend):
             base_url=f"{base_url.rstrip('/')}/v1",
             model=model,
             timeout=timeout,
+            sanitize=sanitize,
         )
         self.ollama_base = base_url.rstrip('/')
 

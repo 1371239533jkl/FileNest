@@ -60,16 +60,29 @@ class AILayer:
         self._init_backend()
         self._initialized = True
 
-    def _send(self, messages, **kwargs):
-        """统一发送入口：PII 脱敏后转发后端。"""
+    def _sanitize_text(self, text: str) -> str:
+        """出站文本脱敏（PII）。由后端在 chat/chat_stream 内部统一调用，
+        因此工具调用循环等绕过 _send 的路径同样被脱敏。"""
         try:
-            if self.privacy.get_config().get('pii_masking', True):
-                for m in messages:
-                    if isinstance(m.get('content'), str):
-                        m['content'] = self.privacy.mask_pii(m['content'])
+            return self.privacy.mask_pii(text)
         except Exception as e:
             logger.warning(f"PII 脱敏跳过: {e}")
-        return self._send(messages, **kwargs)
+            return text
+
+    def _filter_forbidden_files(self, files: list) -> list:
+        """剔除用户设为「AI 禁止访问」目录下的文件，避免其路径/内容进入 prompt。"""
+        if not files:
+            return files
+        try:
+            allowed, _ = self.privacy.filter_forbidden_files(files)
+            return allowed
+        except Exception as e:
+            logger.warning(f"AI 禁止目录过滤跳过: {e}")
+            return files
+
+    def _send(self, messages, **kwargs):
+        """统一发送入口。脱敏已在后端 chat 内部完成（见 _sanitize_text）。"""
+        return self._backend.chat(messages, **kwargs)
 
     def _log_call(self, call_type: str, result: Optional[AIResult] = None,
                   file_count: int = 0, file_paths: Optional[list[str]] = None,
@@ -103,6 +116,7 @@ class AILayer:
                     base_url=active.base_url,
                     model=active.model,
                     timeout=active.timeout,
+                    sanitize=self._sanitize_text,
                 )
                 logger.info(f"AI 已启用 (自定义): {active.name} / {active.model}")
                 return
@@ -117,6 +131,7 @@ class AILayer:
                     base_url=AI_CONFIG.get('base_url', 'https://api.deepseek.com/v1'),
                     model=AI_CONFIG.get('model', 'deepseek-v4-flash'),
                     timeout=AI_CONFIG.get('timeout', 20),
+                    sanitize=self._sanitize_text,
                 )
                 logger.info(f"AI 已启用 (默认配置): {AI_CONFIG.get('model')}")
                 return
@@ -138,7 +153,8 @@ class AILayer:
                         if "instruct" in name or "chat" in name:
                             model_name = m["name"]
                             break
-                    self._backend = OllamaBackend(model=model_name)
+                    self._backend = OllamaBackend(
+                        model=model_name, sanitize=self._sanitize_text)
                     logger.info(f"AI 已启用 (本地 Ollama): {model_name}")
                     return
         except Exception as e:
@@ -299,6 +315,9 @@ class AILayer:
         """
         if not self.enabled or not files:
             return None
+        files = self._filter_forbidden_files(files)
+        if not files:
+            return None
 
         try:
             count = total_count or len(files)
@@ -399,6 +418,9 @@ class AILayer:
             return None
 
         try:
+            if self.privacy.is_path_forbidden(file_record.get('file_path', '')):
+                logger.info("跳过 AI 描述：文件位于 AI 禁止访问目录")
+                return None
             messages = build_file_describe_messages(file_record, extra_metadata)
             result = self._send(messages, max_tokens=300, temperature=0.3)
             return ResponseParser.extract_plain_text(result.content)
@@ -744,14 +766,7 @@ class AILayer:
             return
 
         try:
-            # 流式入口同样做 PII 脱敏（复用 _send 的掩码逻辑，但走流式后端）
-            try:
-                if self.privacy.get_config().get('pii_masking', True):
-                    for m in messages:
-                        if isinstance(m.get('content'), str):
-                            m['content'] = self.privacy.mask_pii(m['content'])
-            except Exception as e:
-                logger.warning(f"PII 脱敏跳过: {e}")
+            # 脱敏由后端 chat_stream 内部统一完成（见 _sanitize_text）
             yield from self._backend.chat_stream(
                 messages=messages,
                 max_tokens=max_tokens,
@@ -856,6 +871,9 @@ class AILayer:
             失败返回 None
         """
         if not self.enabled or not files:
+            return None
+        files = self._filter_forbidden_files(files)
+        if not files:
             return None
 
         try:

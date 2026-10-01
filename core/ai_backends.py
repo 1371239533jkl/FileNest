@@ -55,12 +55,27 @@ class OpenAICompatibleBackend:
     """通用 OpenAI 兼容协议后端 —— 支持任意兼容的 API 提供商"""
 
     def __init__(self, api_key: str, base_url: str, model: str,
-                 timeout: float = 20.0):
+                 timeout: float = 20.0, sanitize=None):
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
+        # sanitize：可选的出站文本处理回调（如 PII 脱敏）。放在后端 chat/
+        # chat_stream 内部，确保工具调用循环等绕过 AILayer._send 的路径也生效。
+        self._sanitize = sanitize
         self._client: Optional[httpx.Client] = None
+
+    def _prepare_messages(self, messages: list[dict]) -> list[dict]:
+        """发送前对每条消息文本做统一处理（脱敏）。不修改调用方的原始列表。"""
+        if not self._sanitize:
+            return messages
+        prepared = []
+        for m in messages:
+            content = m.get('content') if isinstance(m, dict) else None
+            if isinstance(content, str):
+                m = {**m, 'content': self._sanitize(content)}
+            prepared.append(m)
+        return prepared
 
     @property
     def client(self) -> httpx.Client:
@@ -90,7 +105,7 @@ class OpenAICompatibleBackend:
         t0 = time.time()
         body = {
             "model": self.model,
-            "messages": messages,
+            "messages": self._prepare_messages(messages),
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
@@ -172,7 +187,7 @@ class OpenAICompatibleBackend:
         t0 = time.time()
         body = {
             "model": self.model,
-            "messages": messages,
+            "messages": self._prepare_messages(messages),
             "max_tokens": max_tokens,
             "temperature": temperature,
             "stream": True,

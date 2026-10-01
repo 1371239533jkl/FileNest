@@ -983,7 +983,7 @@ class SearchTab(QWidget):
                 QMessageBox.StandardButton.No)
             if reply2 == QMessageBox.StandardButton.Yes:
                 try:
-                    self.file_manager.permanent_delete(file_id)
+                    self.file_manager.permanent_delete(file_id, confirm=True)
                     self.refresh_data()
                 except Exception as e:
                     QMessageBox.critical(self, "删除失败", str(e))

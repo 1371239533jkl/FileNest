@@ -244,8 +244,15 @@ class FileManager:
         logger.info(f"删除（进回收区）: {old_path} -> {trash_path}")
         return op_id
 
-    def permanent_delete(self, file_id: int, batch_id: Optional[str] = None) -> None:
-        """永久删除文件（直接从磁盘删除 + 从数据库中彻底移除记录）"""
+    def permanent_delete(self, file_id: int, batch_id: Optional[str] = None,
+                         *, confirm: bool = False) -> None:
+        """永久删除文件（直接从磁盘删除 + 从数据库中彻底移除记录）。
+
+        不可恢复，核心层强制显式确认（confirm=True），防止脚本或其他调用方
+        绕过 UI 二次确认直接触发不可逆删除。
+        """
+        if not confirm:
+            raise PermissionError("永久删除不可恢复，需 confirm=True 确认")
         record = self.file_dao.get_by_id(file_id)
         if not record:
             raise ValueError(f"文件记录不存在: id={file_id}")
@@ -313,8 +320,14 @@ class FileManager:
         logger.info(f"恢复文件: {target_path}")
         return target_path
 
-    def purge_file(self, file_id: int, update_status: bool = True) -> None:
-        """从回收区永久删除文件（删除磁盘回收区副本 + 从数据库中彻底移除记录）"""
+    def purge_file(self, file_id: int, update_status: bool = True,
+                   *, confirm: bool = False) -> None:
+        """从回收区永久删除文件（删除磁盘回收区副本 + 从数据库中彻底移除记录）。
+
+        不可恢复，核心层强制显式确认（confirm=True）。
+        """
+        if not confirm:
+            raise PermissionError("从回收区永久删除不可恢复，需 confirm=True 确认")
         record = self.file_dao.get_by_id(file_id)
         if not record:
             raise ValueError(f"文件记录不存在: id={file_id}")

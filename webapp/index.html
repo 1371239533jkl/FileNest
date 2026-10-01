@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Smart File Manager · Web</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<script>try{if(localStorage.getItem('sfm_theme')==='light')document.body.classList.add('light')}catch(e){}</script>
+<div id="app">
+  <aside id="sidebar">
+    <div class="brand">
+      <span class="brand-logo">S</span>
+      <div class="brand-text">
+        <b>Smart File</b>
+        <small>Web Console</small>
+      </div>
+      <button id="btn-collapse" class="collapse-btn" title="折叠 / 展开侧栏">«</button>
+    </div>
+    <nav id="nav"></nav>
+    <div id="sidebar-foot">
+      <button class="nav-btn" id="nav-settings" data-view="settings">⚙ 设置</button>
+      <div class="apikey-state" id="apikey-state"><span class="dot off"></span>未连接</div>
+    </div>
+  </aside>
+  <div id="main">
+    <header id="topbar">
+      <div class="page-title" id="page-title">仪表盘</div>
+      <div class="topbar-actions">
+        <input id="global-search" type="search" placeholder="全局搜索文件名 / 内容…">
+        <button id="btn-cmd" class="icon-btn" title="命令面板 (Ctrl+Shift+P)">⌘</button>
+        <button id="btn-theme" class="icon-btn" title="切换深色/浅色主题">🌙</button>
+        <button id="btn-refresh" class="btn ghost" title="刷新 (F5)">⟳</button>
+      </div>
+    </header>
+    <main id="content"></main>
+  </div>
+</div>
+<div id="toast-wrap"></div>
+<div id="modal-root"></div>
+<script src="js/api.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/views-dashboard.js"></script>
+<script src="js/views-files.js"></script>
+<script src="js/views-manage.js"></script>
+<script src="js/views-manage2.js"></script>
+<script src="js/views-system.js"></script>
+<script src="js/command.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -285,7 +285,7 @@ class RecycleBinTab(QWidget):
         if reply != QMessageBox.StandardButton.Yes:
             return
         try:
-            self.file_mgr.purge_file(file_id)
+            self.file_mgr.purge_file(file_id, confirm=True)
             notify(self, f"已永久删除: {file_name}", 'success', 3000)
             self.refresh_data()
         except Exception as e:
@@ -367,7 +367,7 @@ class RecycleBinTab(QWidget):
         success, failed = 0, 0
         for fid in ids:
             try:
-                self.file_mgr.purge_file(fid)
+                self.file_mgr.purge_file(fid, confirm=True)
                 success += 1
             except Exception as e:
                 failed += 1
@@ -411,7 +411,7 @@ class RecycleBinTab(QWidget):
         success, failed = 0, 0
         for fid in all_ids:
             try:
-                self.file_mgr.purge_file(fid)
+                self.file_mgr.purge_file(fid, confirm=True)
                 success += 1
             except Exception as e:
                 failed += 1

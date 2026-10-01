@@ -26,6 +26,21 @@ import httpx
 from utils.logger import logger
 
 
+def _is_forbidden_ai_path(file_path: str) -> bool:
+    """用户配置的「AI 禁止访问目录」检查。
+
+    接入点覆盖所有会外发文件信息/正文的工具（read_file / search_files /
+    search_content），使 ai_privacy 的 forbidden_dirs 真正生效。
+    """
+    if not file_path:
+        return False
+    try:
+        from core.ai_privacy import AIPrivacy
+        return AIPrivacy().is_path_forbidden(file_path)
+    except Exception:
+        return False
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 工具定义
 # ══════════════════════════════════════════════════════════════════════════════
@@ -167,6 +182,10 @@ def _search_files_handler(query: str = None, file_type: str = None,
             end_date=end_date,
         )
 
+        # 过滤用户设为 AI 禁止访问目录下的文件，避免路径/文件名外发
+        rows = [r for r in rows
+                if not _is_forbidden_ai_path(r.get('file_path', ''))]
+
         # 限制返回数量
         rows = rows[:max_results]
 
@@ -307,6 +326,9 @@ def _search_content_handler(query: str, max_results: int = 8, _db=None,
 
         limit = max(1, min(int(max_results or 8), 20))
         rows = FileContentDAO(_db).search(query, limit=limit)
+        # 过滤用户设为 AI 禁止访问目录下的文件，避免正文/路径外发
+        rows = [r for r in rows
+                if not _is_forbidden_ai_path(r.get('file_path', ''))]
         if not rows:
             return ("未在已建立正文索引的文件中找到匹配内容。"
                     "可提醒用户先在搜索页或扫描页执行“构建正文索引”。")
@@ -618,6 +640,9 @@ def _read_file_handler(file_path: str, max_chars: int = 8000, _db=None,
     roots = _get_allowed_read_roots(_db)
     if not roots or not any(path.is_relative_to(root) for root in roots):
         return "[安全限制] 只允许读取已启用扫描目录中的文件"
+    # 用户设为 AI 禁止访问的目录（core.ai_privacy.forbidden_dirs）
+    if _is_forbidden_ai_path(str(path)):
+        return f"[安全限制] 该文件所在目录已设为 AI 禁止访问: {file_path}"
 
     # Defense in depth for credentials stored inside an otherwise allowed root.
     dangerous_patterns = [
