@@ -1,6 +1,6 @@
 # 项目进度
 
-> 最后更新：2026-11-20　当前阶段：**P2 完成 / P3 待开始**　总体完成度：约 75%
+> 最后更新：2026-11-20　当前阶段：**P3（进行中）**　总体完成度：约 79%
 > 方案与验收标准见 `docs/REFACTOR_PLAN.md`；性能基线见 `docs/perf/BASELINE.md`。
 
 ## 一句话现状
@@ -14,7 +14,7 @@ P0 全部走完（度量、骨架、sidecar 握手、打包，含一次体积决
 | P0 度量与骨架 | ✅ 完成 | 100% | NSIS 安装包未产出（网络阻塞），其余达成 |
 | P1 服务化与数据治理 | 🟡 收尾 | 约 85% | 数据层 + 计算内核 + 扫描服务 + 任务/SSE + 缩略图/退出/token 已落地；剩 watcher 等按需项 |
 | P2 渲染骨架与设计系统 | ✅ 完成 | 100% | 7 个页面 + 组件库 + 截图回归 |
-| P3 页面迁移 | ⬜ 未开始 | 0% | 依赖 P2 |
+| P3 页面迁移 | 🟡 进行中 | 约 15% | AI 对话已落地；分类/清理/时间线等未做 |
 | P4 收尾与发布 | ⬜ 未开始 | 0% | — |
 
 ## 已完成（可验收）
@@ -45,6 +45,7 @@ P0 全部走完（度量、骨架、sidecar 握手、打包，含一次体积决
 | T2-10 | 历史页：回收区（恢复）+ 操作记录（撤销、类型筛选） | `pages/HistoryPage.vue` | 测试覆盖删除→回收区→恢复（文件回原位、库状态一致）；截图 `docs/screenshot_v3_recycle.png`、`docs/screenshot_v3_history.png` |
 | T2-11 | 标签页：列表/新增/重命名/删除；修复 `rename_tag` | `pages/TagsPage.vue`、`database/models.py` | `rename_tag` 原先只改 `file_tags`，无关联文件的标签改名无效；改为事务内同步 `tags` 与别名；测试覆盖增删改（中文名 URL 编码）；截图 `docs/screenshot_v3_tags.png` |
 | T2-12 | 设置页：AI 提供商增删改/默认/测试 + 运行信息 | `pages/SettingsPage.vue` | 模板快速创建、密钥掩码沿用；运行信息读 `/health`（版本/端口/PID）；截图 `docs/screenshot_v3_settings.png` |
+| T3-1 | AI 对话页：SSE 流式 + Markdown 渲染 + 净化 | `pages/ChatPage.vue`、`main/index.ts`、`lib/markdown.ts` | 主进程消费 SSE 并逐帧转发 IPC；markdown-it（`html:false`）+ DOMPurify；实测链路：meta/error 帧正确渲染，静态 Markdown（表/代码/引用）渲染正常；截图 `docs/screenshot_v3_chat.png`、`docs/screenshot_v3_markdown.png` |
 
 ## 关键数字（实测，Windows 11 / 12 核 / Python 3.14.9）
 
@@ -59,8 +60,9 @@ P0 全部走完（度量、骨架、sidecar 握手、打包，含一次体积决
 
 ## 下一步（按顺序）
 
-1. **AI 对话页**（P3 首块）：`/api/ai/chat/stream` 流式渲染 + 引用锚点 + 会话保存
-2. **分类管理页**：`/api/classifications` 列表与批量改类
+1. **分类管理页**：分类列表 + 批量改类 + 覆盖率展示
+2. **清理中心**：规则建议（`/api/ai/insights`、cleanup 规则）+ 一键清理
+3. 之后：时间线、归档包、工作区
 3. 之后：标签页、设置页、AI 对话（流式 + 引用）
 3. 之后：AI 对话（流式 + 引用），再接扫描/重复/历史/标签/设置
 4. **T1-1b（按需）**：`file_watcher` 等 Qt 模块仅在需要同等能力时才改
@@ -97,6 +99,9 @@ P0 全部走完（度量、骨架、sidecar 握手、打包，含一次体积决
 | 27 | 标签颜色/合并/别名管理未接 UI（接口已有） | 层级与配色能力闲置 | 需要时补 |
 | 28 | 后端没有扫描目录的增删改接口，设置页无法管理扫描目录 | 用户无法在界面里增删监控目录 | 补 `/api/directories` CRUD（DAO 已就绪） |
 | 29 | 设置页"测试连接"按钮未验证（需要真实 API Key） | 失败原因可能不友好 | 配好真实密钥后手测一次 |
+| 30 | AI 对话的"逐字流式"未用真实模型验证（只验证了 meta/error 帧与静态 Markdown） | delta 追加逻辑未经真实 token 流检验 | 配好模型后发一条长回答观察 |
+| 31 | 首次对话约有 4 秒无响应（`_ai_layer()` 初始化慢） | 用户会以为卡住 | 页面加"思考中…"占位，或预热 AI 层 |
+| 32 | 对话不保存，刷新即丢 | 无法回看历史问答 | 接 `sessions/` 持久化 |
 
 
 ## 决策记录（已确认）

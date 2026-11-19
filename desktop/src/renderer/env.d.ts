@@ -23,6 +23,9 @@ declare global {
       post: (path: string, body?: unknown) => Promise<ApiResult>
       del: (path: string) => Promise<ApiResult>
       open: (path: string) => Promise<string>
+      openExternal: (url: string) => Promise<boolean>
+      chatStream: (message: string) => Promise<{ ok: boolean; error?: string }>
+      onChatEvent: (handler: (payload: any) => void) => () => void
       reveal: (path: string) => Promise<void>
       copy: (text: string) => Promise<void>
       thumb: (path: string, size?: number) => Promise<ApiResult>

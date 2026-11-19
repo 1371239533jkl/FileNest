@@ -5,6 +5,27 @@ import BarList from '../components/BarList.vue'
 import DataTable, { type Column } from '../components/DataTable.vue'
 import Panel from '../components/Panel.vue'
 import StatCard from '../components/StatCard.vue'
+import { renderMarkdown } from '../lib/markdown'
+
+const MARKDOWN_SAMPLE = [
+  '### 找到 2 个相关文件',
+  '',
+  '- **季度报告.pdf** — 2.4 MB，最后修改 11-18',
+  '- `budget.xlsx` — 812 KB',
+  '',
+  '> 以下结论基于本地索引，不联网。',
+  '',
+  '| 类型 | 数量 |',
+  '|------|------|',
+  '| 文档 | 458 |',
+  '| 图片 | 302 |',
+  '',
+  '```python',
+  'print("hello")',
+  '```',
+  '',
+  '参考 [文档](https://example.com)。',
+].join('\n')
 
 const COLORS = [
   ['背景', '--bg'], ['卡片', '--card'], ['描边', '--line'],
@@ -52,6 +73,10 @@ const loadingRows = ref<any[]>([])
       <h2 class="demo-h2">面板标题 13px</h2>
       <p class="demo-body">正文 14px，用于列表与说明文字。</p>
       <p class="demo-muted">次要文字 12px，用于时间、路径、辅助信息。</p>
+    </Panel>
+
+    <Panel title="Markdown 渲染" hint="markdown-it + DOMPurify">
+      <div class="md" data-md-sample v-html="renderMarkdown(MARKDOWN_SAMPLE)" />
     </Panel>
 
     <Panel title="按钮">
