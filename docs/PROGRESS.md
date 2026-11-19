@@ -1,6 +1,6 @@
 # 项目进度
 
-> 最后更新：2026-11-19　当前阶段：**P2（进行中）**　总体完成度：约 44%
+> 最后更新：2026-11-19　当前阶段：**P2（进行中）**　总体完成度：约 46%
 > 方案与验收标准见 `docs/REFACTOR_PLAN.md`；性能基线见 `docs/perf/BASELINE.md`。
 
 ## 一句话现状
@@ -13,7 +13,7 @@ P0 全部走完（度量、骨架、sidecar 握手、打包，含一次体积决
 |------|------|--------|------|
 | P0 度量与骨架 | ✅ 完成 | 100% | NSIS 安装包未产出（网络阻塞），其余达成 |
 | P1 服务化与数据治理 | 🟡 收尾 | 约 85% | 数据层 + 计算内核 + 扫描服务 + 任务/SSE + 缩略图/退出/token 已落地；剩 watcher 等按需项 |
-| P2 渲染骨架与设计系统 | 🟡 进行中 | 约 30% | 壳/设计 token/仪表盘/文件表格（虚拟滚动）已跑通 |
+| P2 渲染骨架与设计系统 | 🟡 进行中 | 约 40% | 壳/设计 token/仪表盘/文件表格 + DataTable 组件 + 组件总览页 |
 | P3 页面迁移 | ⬜ 未开始 | 0% | 依赖 P2 |
 | P4 收尾与发布 | ⬜ 未开始 | 0% | — |
 
@@ -36,6 +36,7 @@ P0 全部走完（度量、骨架、sidecar 握手、打包，含一次体积决
 | T2-1 | 渲染层 → preload → 主进程 → API 链路 | `desktop/src/main/api.ts`、`preload/index.ts` | 路径白名单 + token；渲染层无直连网络（CSP `connect-src 'none'`） |
 | T2-2 | 设计 token + 基础组件 + 仪表盘 | `renderer/styles`、`components`、`pages/DashboardPage.vue` | 1100 文件真实数据渲染，截图见 `docs/screenshot_v3_dashboard.png` |
 | T2-3 | 文件表格：虚拟滚动 + keyset 分页 + 右键菜单 | `renderer/pages/FilesPage.vue`、`web_api.py` | 2.2 万行滚动 p95 5.8ms/max 6.4ms；分页不重不漏（测试覆盖）；截图 `docs/screenshot_v3_files.png` |
+| T2-4 | 抽出 DataTable / AppButton + 组件总览页 | `components/DataTable.vue`、`pages/Styleguide.vue` | 表格三种状态可预览；重构后性能复测 p95 6.2ms；截图 `docs/screenshot_v3_styleguide.png` |
 
 ## 关键数字（实测，Windows 11 / 12 核 / Python 3.14.9）
 
@@ -69,6 +70,7 @@ P0 全部走完（度量、骨架、sidecar 握手、打包，含一次体积决
 | 8 | 排除 numpy/pymupdf4llm 可省约 30MB | 体积优化 | 可选，不阻塞 |
 | 9 | 旧 PyQt6 界面仍走 `FileScanWorker`（未接入新内核） | 旧界面不享受提速 | 随 P3/P4 删旧 UI 自然消失；服务端已接新内核 |
 | 10 | `dhash_many` 无真实图片集验证 | 相似图并行收益未证实 | 有图片语料后补测 |
+| 11 | 组件总览页挂在主导航（`组件`） | 发布版不应出现 | P4 前移除入口，保留文件 |
 
 ## 决策记录（已确认）
 

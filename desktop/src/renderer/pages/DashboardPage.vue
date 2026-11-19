@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import AppButton from '../components/AppButton.vue'
 import BarList from '../components/BarList.vue'
 import Panel from '../components/Panel.vue'
 import StatCard from '../components/StatCard.vue'
@@ -44,9 +45,9 @@ onMounted(load)
         <h1>仪表盘</h1>
         <p>本地文件索引概览</p>
       </div>
-      <button class="ghost" :disabled="loading" @click="load">
+      <AppButton variant="ghost" :disabled="loading" @click="load">
         {{ loading ? '加载中…' : '刷新' }}
-      </button>
+      </AppButton>
     </header>
 
     <p v-if="error" class="error">加载失败：{{ error }}</p>
@@ -92,16 +93,6 @@ onMounted(load)
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; }
 h1 { margin: 0; font-size: 20px; }
 .page-head p { margin: 2px 0 0; color: var(--dim); font-size: 12px; }
-.ghost {
-  padding: 6px 14px;
-  color: var(--text);
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-.ghost:hover:not(:disabled) { border-color: var(--primary); }
-.ghost:disabled { color: var(--dim); cursor: default; }
 .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-4); }
 .grid { display: grid; grid-template-columns: 1.3fr 1fr; gap: var(--space-4); }
 .empty { margin: 0; color: var(--dim); font-size: 13px; }

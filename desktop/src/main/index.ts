@@ -64,15 +64,18 @@ if (!app.requestSingleInstanceLock()) {
       win.webContents.once('did-finish-load', async () => {
         win?.show()
         await new Promise((r) => setTimeout(r, 1500))
-        if (process.argv.includes('--shot-files')) {
+        const tabArg = process.argv
+          .find((arg) => arg.startsWith('--shot-tab='))
+          ?.split('=')[1]
+        if (tabArg && /^[a-z-]+$/.test(tabArg)) {
           await win!.webContents.executeJavaScript(
-            `document.querySelector('[data-tab="files"]')?.click()`,
+            `document.querySelector('[data-tab="${tabArg}"]')?.click()`,
           )
           await new Promise((r) => setTimeout(r, 1500))
           const perf = await win!.webContents.executeJavaScript(
             `window.__scrollPerf ? window.__scrollPerf() : null`,
           )
-          console.log(`[perf] ${JSON.stringify(perf)}`)
+          if (perf) console.log(`[perf] ${JSON.stringify(perf)}`)
         }
         const image = await win!.webContents.capturePage()
         fs.writeFileSync(SHOT, image.toPNG())

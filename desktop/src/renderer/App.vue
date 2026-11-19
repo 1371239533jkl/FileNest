@@ -2,8 +2,15 @@
 import { ref } from 'vue'
 import DashboardPage from './pages/DashboardPage.vue'
 import FilesPage from './pages/FilesPage.vue'
+import Styleguide from './pages/Styleguide.vue'
 
-const tab = ref<'dashboard' | 'files'>('dashboard')
+const TABS = [
+  { key: 'dashboard', label: '仪表盘' },
+  { key: 'files', label: '文件' },
+  { key: 'styleguide', label: '组件' },
+] as const
+
+const tab = ref<(typeof TABS)[number]['key']>('dashboard')
 </script>
 
 <template>
@@ -11,17 +18,19 @@ const tab = ref<'dashboard' | 'files'>('dashboard')
     <header class="topbar">
       <span class="brand">FileNest</span>
       <nav>
-        <button data-tab="dashboard" :class="{ on: tab === 'dashboard' }" @click="tab = 'dashboard'">
-          仪表盘
-        </button>
-        <button data-tab="files" :class="{ on: tab === 'files' }" @click="tab = 'files'">
-          文件
-        </button>
+        <button
+          v-for="item in TABS"
+          :key="item.key"
+          :data-tab="item.key"
+          :class="{ on: tab === item.key }"
+          @click="tab = item.key"
+        >{{ item.label }}</button>
       </nav>
     </header>
     <main class="content">
       <DashboardPage v-show="tab === 'dashboard'" />
       <FilesPage v-show="tab === 'files'" />
+      <Styleguide v-show="tab === 'styleguide'" />
     </main>
   </div>
 </template>
