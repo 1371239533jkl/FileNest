@@ -56,3 +56,30 @@ docs/*
 !docs/README.md
 !docs/*.png
 
+
+# 基准数据集（体积大，可用 bench/gen_dataset.py 再生成）
+bench/data/
+
+# 重构方案与性能报告（docs/* 默认忽略，需显式放行）
+!docs/REFACTOR_PLAN.md
+!docs/perf/
+!docs/perf/**
+
+# 本地虚拟环境
+.venv/
+
+# Node / Electron
+desktop/node_modules/
+
+# Electron 打包产物与临时构建目录
+desktop/release/
+desktop/packaging/dist/
+desktop/packaging/build/
+desktop/packaging/*.spec
+
+# 进度文档入库（便于跟踪）
+!docs/PROGRESS.md
+
+# 构建日志
+desktop/*.log
+desktop/packaging/*.log
