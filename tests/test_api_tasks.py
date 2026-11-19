@@ -179,6 +179,43 @@ def test_duplicate_suggest_and_clean(tmp_path):
         _teardown(path)
 
 
+def test_dedup_detection_creates_group(tmp_path):
+    """多阶段检测：两个同内容文件应被分到同一组，独立文件不入选。"""
+    path = _prepare_db()
+    root = tmp_path / 'detect'
+    root.mkdir()
+    (root / 'a.txt').write_bytes(b'same')
+    (root / 'b.txt').write_bytes(b'same')
+    (root / 'c.txt').write_bytes(b'different!')
+
+    try:
+        with TestClient(server.app) as client:
+            scan_id = client.post(
+                '/api/scan/start',
+                json={'directory': str(root), 'compute_hash': False},
+            ).json()['task_id']
+            for _ in range(200):
+                if client.get(f'/api/tasks/{scan_id}').json()['status'] != 'running':
+                    break
+                time.sleep(0.05)
+
+            dedup_id = client.post('/api/dedup/start').json()['task_id']
+            for _ in range(400):
+                if client.get(f'/api/tasks/{dedup_id}').json()['status'] != 'running':
+                    break
+                time.sleep(0.05)
+
+            groups = client.get('/api/duplicates').json()
+            assert groups['total'] == 1, groups
+            group = groups['items'][0]
+            assert group['file_count'] == 2
+
+            detail = client.get(f"/api/duplicates/{group['group_id']}").json()
+            assert {f['file_name'] for f in detail['files']} == {'a.txt', 'b.txt'}
+    finally:
+        _teardown(path)
+
+
 def test_thumb_returns_jpeg(tmp_path):
     from PIL import Image
 

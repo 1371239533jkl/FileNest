@@ -14,6 +14,7 @@ const POST_ALLOWED = [
   /^\/api\/scan\/cancel(\?|$)/,
   /^\/api\/duplicates\/clean$/,
   /^\/api\/duplicates\/\d+\/suggest(\?|$)/,
+  /^\/api\/dedup\/start(\?|$)/,
 ]
 
 export interface ApiResult {

@@ -198,6 +198,27 @@ def scan_start(req: ScanStartReq, x_api_key: Optional[str] = Header(None)):
     return {'task_id': task.id}
 
 
+@app.post('/api/dedup/start')
+def dedup_start(reset: bool = False, x_api_key: Optional[str] = Header(None)):
+    """多阶段重复检测：按大小 → 快速哈希 → 完整哈希分组，结果写回 files 表。"""
+    _auth(x_api_key)
+
+    def job(progress, cancel_event):
+        from core.multistage_dedup import MultistageDedupDetector
+
+        def on_stage(_stage, current, total, _path):
+            progress(current, total)
+
+        return MultistageDedupDetector().run(
+            progress_cb=on_stage,
+            reset=reset,
+            cancel_check=cancel_event.is_set,
+        )
+
+    task = TASKS.submit('dedup', job)
+    return {'task_id': task.id}
+
+
 @app.post('/api/scan/cancel')
 def scan_cancel(task_id: int, x_api_key: Optional[str] = Header(None)):
     _auth(x_api_key)

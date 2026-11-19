@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import AppButton from '../components/AppButton.vue'
 import Panel from '../components/Panel.vue'
 import { formatBytes, formatCount, formatTime } from '../lib/format'
@@ -30,6 +30,11 @@ const notice = ref('')
 const activeId = ref<number | null>(null)
 const files = ref<FileRow[]>([])
 const keepId = ref<number | null>(null)
+
+const detecting = ref(false)
+const detectPercent = ref(0)
+const detectTaskId = ref<number | null>(null)
+let timer: ReturnType<typeof setTimeout> | null = null
 
 const activeGroup = computed(() => groups.value.find((g) => g.group_id === activeId.value) || null)
 const removeCount = computed(() => files.value.filter((f) => f.id !== keepId.value).length)
@@ -113,7 +118,45 @@ function openFile(path: string) {
   void window.api.open(path)
 }
 
+async function startDetect() {
+  error.value = ''
+  notice.value = ''
+  const res = await window.api.post('/api/dedup/start')
+  if (!res.ok) {
+    error.value = res.error || `HTTP ${res.status}`
+    return
+  }
+  detectTaskId.value = (res.data as { task_id: number }).task_id
+  detectPercent.value = 0
+  detecting.value = true
+  void pollDetect()
+}
+
+async function pollDetect() {
+  const res = await window.api.get('/api/tasks')
+  if (!res.ok) {
+    detecting.value = false
+    return
+  }
+  const snapshot = res.data as { tasks: any[]; running: number }
+  const task = snapshot.tasks.find((t) => t.id === detectTaskId.value)
+  if (task) {
+    detectPercent.value = task.percent || 0
+    if (task.status === 'failed') error.value = task.error || '检测失败'
+  }
+  if (snapshot.running > 0) {
+    timer = setTimeout(pollDetect, 500)
+    return
+  }
+  detecting.value = false
+  detectTaskId.value = null
+  await loadGroups()
+}
+
 onMounted(loadGroups)
+onBeforeUnmount(() => {
+  if (timer) clearTimeout(timer)
+})
 </script>
 
 <template>
@@ -126,7 +169,12 @@ onMounted(loadGroups)
           <span class="dim">（按浪费空间排序）</span>
         </p>
       </div>
-      <AppButton :disabled="loading" @click="loadGroups">重新加载</AppButton>
+      <div class="head-actions">
+        <AppButton :disabled="detecting" @click="startDetect">
+          {{ detecting ? `检测中 ${detectPercent}%` : '检测重复' }}
+        </AppButton>
+        <AppButton :disabled="loading || detecting" @click="loadGroups">重新加载</AppButton>
+      </div>
     </header>
 
     <p v-if="error" class="error">{{ error }}</p>
@@ -147,8 +195,10 @@ onMounted(loadGroups)
           </li>
         </ul>
         <p v-else-if="!loading" class="empty">
-          没有发现重复文件。先去<span class="dim">扫描</span>页建立索引，重复检测会在扫描后执行。
+          还没有重复数据。先在<span class="dim">扫描</span>页建立索引，
+          再点右上角「检测重复」（按大小 → 快速哈希 → 完整哈希三阶段比对）。
         </p>
+        <p v-else class="empty">加载中…</p>
       </Panel>
 
       <Panel
@@ -196,6 +246,7 @@ onMounted(loadGroups)
 <style scoped>
 .page { display: flex; flex-direction: column; gap: var(--space-4); height: calc(100vh - 52px - var(--space-5) * 2); }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; }
+.head-actions { display: flex; gap: var(--space-2); }
 h1 { margin: 0; font-size: 20px; }
 .page-head p { margin: 2px 0 0; color: var(--dim); font-size: 12px; }
 .error { margin: 0; padding: 10px 12px; color: #fecaca; background: #3f1d1d; border-radius: var(--radius-sm); }
