@@ -1,7 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
-import { apiGet, apiPost, apiThumb } from './api'
+import { apiDelete, apiGet, apiPost, apiThumb } from './api'
 import { readTextHead } from './files'
 import { getSidecarInfo, startSidecar, stopSidecar } from './sidecar'
 
@@ -57,6 +57,7 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('clipboard:write', (_event, text: string) => clipboard.writeText(String(text)))
     ipcMain.handle('api:thumb', (_event, target: string, size?: number) => apiThumb(target, size))
     ipcMain.handle('api:post', (_event, target: string, body?: unknown) => apiPost(target, body))
+    ipcMain.handle('api:delete', (_event, target: string) => apiDelete(target))
     ipcMain.handle('file:readText', (_event, target: string) => readTextHead(target))
     ipcMain.handle('dialog:confirm', async (_event, title: string, message: string) => {
       const { response } = await dialog.showMessageBox({

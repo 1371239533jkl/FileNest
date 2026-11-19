@@ -259,6 +259,35 @@ def test_delete_then_restore(tmp_path):
         _teardown(path)
 
 
+def test_tag_crud():
+    """标签：新增 / 重命名 / 删除（中文名走 URL 编码）。"""
+    from urllib.parse import quote
+
+    path = _prepare_db()
+    try:
+        with TestClient(server.app) as client:
+            created = client.post('/api/tags', json={'tag': '项目A'})
+            assert created.status_code == 200, created.text
+
+            names = [t['tag_name'] for t in client.get('/api/tags/full').json()['tags']]
+            assert '项目A' in names
+
+            renamed = client.post(
+                '/api/tags/rename',
+                params={'old_name': '项目A', 'new_name': '项目B'},
+            )
+            assert renamed.status_code == 200, renamed.text
+            names = [t['tag_name'] for t in client.get('/api/tags/full').json()['tags']]
+            assert '项目B' in names and '项目A' not in names
+
+            removed = client.delete(f'/api/tags/{quote("项目B")}')
+            assert removed.status_code == 200, removed.text
+            names = [t['tag_name'] for t in client.get('/api/tags/full').json()['tags']]
+            assert '项目B' not in names
+    finally:
+        _teardown(path)
+
+
 def test_thumb_returns_jpeg(tmp_path):
     from PIL import Image
 

@@ -19,7 +19,10 @@ const POST_ALLOWED = [
   /^\/api\/dedup\/start(\?|$)/,
   /^\/api\/files\/\d+\/restore$/,
   /^\/api\/history\/\d+\/undo$/,
+  /^\/api\/tags$/,
+  /^\/api\/tags\/rename(\?|$)/,
 ]
+const DELETE_ALLOWED = [/^\/api\/tags\/[^/?]+$/]
 
 export interface ApiResult {
   ok: boolean
@@ -29,11 +32,12 @@ export interface ApiResult {
 }
 
 async function request(
-  method: 'GET' | 'POST',
+  method: 'GET' | 'POST' | 'DELETE',
   path: string,
   body?: unknown,
 ): Promise<ApiResult> {
-  const allowlist = method === 'GET' ? GET_ALLOWED : POST_ALLOWED
+  const allowlist =
+    method === 'GET' ? GET_ALLOWED : method === 'POST' ? POST_ALLOWED : DELETE_ALLOWED
   if (!allowlist.some((re) => re.test(path))) {
     return { ok: false, status: 403, error: `path not allowed: ${method} ${path}` }
   }
@@ -66,6 +70,10 @@ export function apiGet(path: string): Promise<ApiResult> {
 
 export function apiPost(path: string, body?: unknown): Promise<ApiResult> {
   return request('POST', path, body)
+}
+
+export function apiDelete(path: string): Promise<ApiResult> {
+  return request('DELETE', path)
 }
 
 /** 缩略图：返回 data URI，避免渲染层直连网络 */

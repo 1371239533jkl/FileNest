@@ -6,11 +6,13 @@ import FilesPage from './pages/FilesPage.vue'
 import HistoryPage from './pages/HistoryPage.vue'
 import ScanPage from './pages/ScanPage.vue'
 import Styleguide from './pages/Styleguide.vue'
+import TagsPage from './pages/TagsPage.vue'
 
 const TABS = [
   { key: 'dashboard', label: '仪表盘' },
   { key: 'files', label: '文件' },
   { key: 'duplicates', label: '重复' },
+  { key: 'tags', label: '标签' },
   { key: 'scan', label: '扫描' },
   { key: 'history', label: '历史' },
   { key: 'styleguide', label: '组件' },
@@ -37,6 +39,7 @@ const tab = ref<(typeof TABS)[number]['key']>('dashboard')
       <DashboardPage v-show="tab === 'dashboard'" />
       <FilesPage v-show="tab === 'files'" />
       <DuplicatesPage v-show="tab === 'duplicates'" />
+      <TagsPage v-show="tab === 'tags'" />
       <ScanPage v-show="tab === 'scan'" />
       <HistoryPage v-show="tab === 'history'" />
       <Styleguide v-show="tab === 'styleguide'" />

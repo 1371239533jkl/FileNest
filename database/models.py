@@ -937,9 +937,19 @@ class TagDAO:
         return result
 
     def rename_tag(self, old_name: str, new_name: str) -> int:
-        return self.db.execute_update(
-            "UPDATE file_tags SET tag_name = ? WHERE tag_name = ?",
-            (new_name.strip(), old_name.strip()))
+        """改名要同时覆盖 file_tags、tags 与别名：只改 file_tags 时，
+        没有关联文件的标签会改名无效（tags 表里仍是旧名）。"""
+        old, new = old_name.strip(), new_name.strip()
+        if not old or not new:
+            raise ValueError('标签名不能为空')
+        with self.db.transaction():
+            total = self.db.execute_update(
+                "UPDATE file_tags SET tag_name = ? WHERE tag_name = ?", (new, old))
+            total += self.db.execute_update(
+                "UPDATE tags SET tag_name = ? WHERE tag_name = ?", (new, old))
+            self.db.execute_update(
+                "UPDATE tag_aliases SET canonical = ? WHERE canonical = ?", (new, old))
+        return total
 
     def delete_tag(self, tag_name: str) -> int:
         total = self.db.execute_update(
