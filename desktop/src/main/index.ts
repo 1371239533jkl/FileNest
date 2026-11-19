@@ -175,6 +175,12 @@ if (!app.requestSingleInstanceLock()) {
             await new Promise((r) => setTimeout(r, 2500))
           }
 
+          // 等异步内容（AI 洞察等）加载完再截图
+          const waitArg = Number(argValue('--shot-wait=') || 0)
+          if (waitArg > 0) {
+            await new Promise((r) => setTimeout(r, Math.min(waitArg, 60000)))
+          }
+
           // 截图前把 Markdown 示例滚到视口中央（组件页内容较长）
           if (process.argv.includes('--shot-scroll-md')) {
             const scrolled = await win!.webContents.executeJavaScript(`

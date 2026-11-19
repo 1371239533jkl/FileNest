@@ -13,6 +13,8 @@ const GET_ALLOWED = [
   /^\/api\/ai\/providers(\?|$)/,
   /^\/api\/settings(\?|$)/,
   /^\/api\/classification(\?|$)/,
+  /^\/api\/cleanup\/(analyze|exclusions)(\?|$)/,
+  /^\/api\/ai\/insights(\?|$)/,
 ]
 const POST_ALLOWED = [
   /^\/api\/scan\/start$/,
@@ -30,6 +32,7 @@ const POST_ALLOWED = [
   /^\/api\/classification\/apply(\?|$)/,
   /^\/api\/classification\/rules$/,
   /^\/api\/classification\/rules\/\d+\/toggle(\?|$)/,
+  /^\/api\/cleanup\/execute$/,
 ]
 const DELETE_ALLOWED = [
   /^\/api\/tags\/[^/?]+$/,

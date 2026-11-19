@@ -768,9 +768,16 @@ def cleanup_analyze(x_api_key: Optional[str] = Header(None)):
     result = CleanupCenter().analyze()
     counts = {}
     items = []
+    seen = set()
     for k, v in result.items():
         counts[k] = len(v)
+        # 'all' 是各类别的并集，展开会让每个文件出现两次
+        if k == 'all':
+            continue
         for i in v:
+            if i['file_id'] in seen:
+                continue
+            seen.add(i['file_id'])
             items.append({'file_id': i['file_id'], 'file_path': i['file_path'],
                           'file_name': i['file_name'], 'file_size': i['file_size'],
                           'category': i['category'], 'reason': i['reason']})

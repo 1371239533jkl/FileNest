@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import ChatPage from './pages/ChatPage.vue'
 import ClassificationPage from './pages/ClassificationPage.vue'
+import CleanupPage from './pages/CleanupPage.vue'
 import DashboardPage from './pages/DashboardPage.vue'
 import DuplicatesPage from './pages/DuplicatesPage.vue'
 import FilesPage from './pages/FilesPage.vue'
@@ -17,6 +18,7 @@ const TABS = [
   { key: 'chat', label: 'AI' },
   { key: 'duplicates', label: '重复' },
   { key: 'classification', label: '分类' },
+  { key: 'cleanup', label: '清理' },
   { key: 'tags', label: '标签' },
   { key: 'scan', label: '扫描' },
   { key: 'history', label: '历史' },
@@ -47,6 +49,7 @@ const tab = ref<(typeof TABS)[number]['key']>('dashboard')
       <ChatPage v-show="tab === 'chat'" />
       <DuplicatesPage v-show="tab === 'duplicates'" />
       <ClassificationPage v-show="tab === 'classification'" />
+      <CleanupPage v-show="tab === 'cleanup'" />
       <TagsPage v-show="tab === 'tags'" />
       <ScanPage v-show="tab === 'scan'" />
       <HistoryPage v-show="tab === 'history'" />

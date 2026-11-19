@@ -528,7 +528,8 @@ class AILayer:
                 top_dirs=top_dirs,
                 monthly_trend=monthly_trend,
             )
-            result = self._send(messages, max_tokens=400, temperature=0.3)
+            # 400 太小：推理型模型会先消耗 token 思考，正文常被截断或返回空串
+            result = self._send(messages, max_tokens=900, temperature=0.3)
             return ResponseParser.extract_plain_text(result.content)
         except Exception as e:
             logger.warning(f"AI 仪表盘洞察失败: {e}")
