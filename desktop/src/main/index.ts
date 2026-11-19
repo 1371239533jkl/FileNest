@@ -1,6 +1,10 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
+import fs from 'node:fs'
 import path from 'node:path'
+import { apiGet } from './api'
 import { getSidecarInfo, startSidecar, stopSidecar } from './sidecar'
+
+const SHOT = process.argv.find((arg) => arg.startsWith('--shot='))?.split('=')[1]
 
 const SMOKE = process.argv.includes('--smoke')
 let win: BrowserWindow | null = null
@@ -40,6 +44,7 @@ if (!app.requestSingleInstanceLock()) {
     console.log(`[main] sidecar ${JSON.stringify(sidecar)}`)
 
     ipcMain.handle('app:health', () => getSidecarInfo())
+    ipcMain.handle('api:get', (_event, requestPath: string) => apiGet(requestPath))
 
     win = createWindow()
 
@@ -49,6 +54,17 @@ if (!app.requestSingleInstanceLock()) {
         console.log(`[smoke] ${sidecar.status === 'ok' ? 'PASS' : 'FAIL'}`)
         process.exitCode = sidecar.status === 'ok' ? 0 : 1
         app.quit() // 走 before-quit 收掉 sidecar，避免孤儿进程
+      })
+    }
+
+    if (SHOT) {
+      win.webContents.once('did-finish-load', async () => {
+        win?.show()
+        await new Promise((r) => setTimeout(r, 2000))
+        const image = await win!.webContents.capturePage()
+        fs.writeFileSync(SHOT, image.toPNG())
+        console.log(`[shot] saved ${SHOT}`)
+        app.quit()
       })
     }
   })

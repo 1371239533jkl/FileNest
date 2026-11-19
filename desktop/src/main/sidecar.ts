@@ -43,6 +43,10 @@ export function getSidecarInfo(): SidecarInfo {
   return info
 }
 
+export function getToken(): string {
+  return TOKEN
+}
+
 export async function startSidecar(timeoutMs = 20000): Promise<SidecarInfo> {
   const port = await freePort()
   info = { status: 'starting', port }

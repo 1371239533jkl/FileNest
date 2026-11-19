@@ -8,10 +8,18 @@ interface SidecarInfo {
   error?: string
 }
 
+interface ApiResult {
+  ok: boolean
+  status: number
+  data?: unknown
+  error?: string
+}
+
 declare global {
   interface Window {
     api: {
       health: () => Promise<SidecarInfo>
+      get: (path: string) => Promise<ApiResult>
     }
   }
 }

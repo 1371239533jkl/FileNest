@@ -1,6 +1,6 @@
 # 项目进度
 
-> 最后更新：2026-11-19　当前阶段：**P1（收尾）**　总体完成度：约 37%
+> 最后更新：2026-11-19　当前阶段：**P2（起步）**　总体完成度：约 40%
 > 方案与验收标准见 `docs/REFACTOR_PLAN.md`；性能基线见 `docs/perf/BASELINE.md`。
 
 ## 一句话现状
@@ -13,7 +13,7 @@ P0 全部走完（度量、骨架、sidecar 握手、打包，含一次体积决
 |------|------|--------|------|
 | P0 度量与骨架 | ✅ 完成 | 100% | NSIS 安装包未产出（网络阻塞），其余达成 |
 | P1 服务化与数据治理 | 🟡 收尾 | 约 85% | 数据层 + 计算内核 + 扫描服务 + 任务/SSE + 缩略图/退出/token 已落地；剩 watcher 等按需项 |
-| P2 渲染骨架与设计系统 | ⬜ 未开始 | 0% | 依赖 P1 |
+| P2 渲染骨架与设计系统 | 🟡 起步 | 约 15% | 壳/设计 token/仪表盘已跑通真实数据 |
 | P3 页面迁移 | ⬜ 未开始 | 0% | 依赖 P2 |
 | P4 收尾与发布 | ⬜ 未开始 | 0% | — |
 
@@ -33,6 +33,8 @@ P0 全部走完（度量、骨架、sidecar 握手、打包，含一次体积决
 | T1-1a | 扫描入库服务去 Qt 并接入服务端 | `core/scan_service.py`、`server.py` | 端到端 6.15s → 1.35s（4.6×）；`/api/scan` 1,100 文件 76ms |
 | T1-2a | 后台任务 + SSE 进度（`scan/start`、`scan/cancel`、`tasks`、`events`） | `core/task_runner.py`、`server.py` | 22k 文件：18 帧进度、5.06s、22000 条全部入库 |
 | T1-2b | 缩略图、优雅退出、请求 token | `server.py`、`desktop/src/main/sidecar.ts` | `/api/thumb` 返回 JPEG；`/api/shutdown` 退出干净；无 token 401；冒烟 PASS 且 0 残留进程 |
+| T2-1 | 渲染层 → preload → 主进程 → API 链路 | `desktop/src/main/api.ts`、`preload/index.ts` | 路径白名单 + token；渲染层无直连网络（CSP `connect-src 'none'`） |
+| T2-2 | 设计 token + 基础组件 + 仪表盘 | `renderer/styles`、`components`、`pages/DashboardPage.vue` | 1100 文件真实数据渲染，截图见 `docs/screenshot_v3_dashboard.png` |
 
 ## 关键数字（实测，Windows 11 / 12 核 / Python 3.14.9）
 
@@ -47,9 +49,10 @@ P0 全部走完（度量、骨架、sidecar 握手、打包，含一次体积决
 
 ## 下一步（按顺序）
 
-1. **P2 起步**：设计 token + 12 个基础组件 + 仪表盘页（读 `/api/dashboard` 真实数据）
-2. **T1-1b（按需）**：`file_watcher` / `data_cache` / `batch_classifier` / `task_manager` 仅在 Vue 页面需要同等能力时才改
-3. 之后：分类管理/搜索页（虚拟滚动 + 缩略图），再接 AI 对话
+1. **分类管理页**：虚拟滚动表格 + `/api/files` 分页 + 缩略图（`/api/thumb`）+ 右键菜单
+2. **文件搜索页**：多条件 + 正文检索 + 分页
+3. 之后：AI 对话（流式 + 引用），再接扫描/重复/历史/标签/设置
+4. **T1-1b（按需）**：`file_watcher` 等 Qt 模块仅在需要同等能力时才改
 
 ## 已知问题 / 技术债
 
