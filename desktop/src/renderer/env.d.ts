@@ -27,6 +27,7 @@ declare global {
       thumb: (path: string, size?: number) => Promise<ApiResult>
       readText: (path: string) => Promise<{ ok: boolean; data?: string; error?: string }>
       pickDirectory: () => Promise<string>
+      confirm: (title: string, message: string) => Promise<boolean>
     }
   }
 }

@@ -5,9 +5,16 @@ const GET_ALLOWED = [
   /^\/api\/dashboard$/,
   /^\/api\/tasks(\/\d+)?$/,
   /^\/api\/files(\?|$)/,
+  /^\/api\/duplicates(\?|$)/,
+  /^\/api\/duplicates\/\d+$/,
   /^\/api\/tags\/full(\?|$)/,
 ]
-const POST_ALLOWED = [/^\/api\/scan\/start$/, /^\/api\/scan\/cancel(\?|$)/]
+const POST_ALLOWED = [
+  /^\/api\/scan\/start$/,
+  /^\/api\/scan\/cancel(\?|$)/,
+  /^\/api\/duplicates\/clean$/,
+  /^\/api\/duplicates\/\d+\/suggest(\?|$)/,
+]
 
 export interface ApiResult {
   ok: boolean

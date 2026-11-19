@@ -126,6 +126,59 @@ def test_files_filters(tmp_path):
         _teardown(path)
 
 
+def test_duplicate_suggest_and_clean(tmp_path):
+    """去重建议与清理：suggest 返回 id 列表（曾因按 dict 取值 500），clean 把副本移入回收区。"""
+    path = _prepare_db()
+    root = tmp_path / 'dups'
+    root.mkdir()
+    first = root / 'a.txt'
+    second = root / 'b.txt'
+    for target in (first, second):
+        target.write_bytes(b'same-content')
+
+    try:
+        with TestClient(server.app) as client:
+            task_id = client.post(
+                '/api/scan/start',
+                json={'directory': str(root), 'compute_hash': True},
+            ).json()['task_id']
+            for _ in range(200):
+                if client.get(f'/api/tasks/{task_id}').json()['status'] != 'running':
+                    break
+                time.sleep(0.05)
+
+            rows = dbm.db.execute_query(
+                "SELECT id FROM files WHERE status='active' ORDER BY id")
+            ids = [row['id'] for row in rows]
+            assert len(ids) == 2
+            dbm.db.execute_update(
+                'UPDATE files SET is_duplicate=1, duplicate_group_id=99 WHERE id IN (?,?)',
+                tuple(ids))
+
+            suggestion = client.post(
+                '/api/duplicates/99/suggest?strategy=keep_newest')
+            assert suggestion.status_code == 200, suggestion.text
+            body = suggestion.json()
+            assert isinstance(body['keep_file_id'], int)
+            assert body['remove_file_ids'] == [
+                ids[0] if body['keep_file_id'] == ids[1] else ids[1]]
+            assert body['remove_total_size'] == len(b'same-content')
+
+            cleaned = client.post('/api/duplicates/clean', json={
+                'group_id': 99,
+                'keep_file_id': body['keep_file_id'],
+                'remove_file_ids': body['remove_file_ids'],
+                'confirm': True,
+            })
+            assert cleaned.status_code == 200, cleaned.text
+            assert cleaned.json()['removed'] == 1
+
+            remaining = [p for p in (first, second) if p.exists()]
+            assert len(remaining) == 1
+    finally:
+        _teardown(path)
+
+
 def test_thumb_returns_jpeg(tmp_path):
     from PIL import Image
 

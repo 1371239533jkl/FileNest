@@ -520,10 +520,12 @@ def suggest_keep(group_id: int, strategy: str = 'keep_newest',
     if not files:
         raise HTTPException(status_code=404, detail='重复组不存在')
     keep_id, removals = DedupManager().suggest_keep(files, strategy)
+    # suggest_keep 返回的 removals 已是 id 列表，按 id 反查大小
+    sizes = {row['id']: (row.get('file_size') or 0) for row in files}
     return {'group_id': group_id, 'strategy': strategy,
             'keep_file_id': keep_id,
-            'remove_file_ids': [r['id'] for r in removals],
-            'remove_total_size': sum(r.get('file_size') or 0 for r in removals)}
+            'remove_file_ids': removals,
+            'remove_total_size': sum(sizes.get(fid, 0) for fid in removals)}
 
 
 @router.post('/duplicates/clean')

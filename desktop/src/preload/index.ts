@@ -10,4 +10,6 @@ contextBridge.exposeInMainWorld('api', {
   thumb: (path: string, size?: number) => ipcRenderer.invoke('api:thumb', path, size),
   readText: (path: string) => ipcRenderer.invoke('file:readText', path),
   pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
+  confirm: (title: string, message: string) =>
+    ipcRenderer.invoke('dialog:confirm', title, message),
 })

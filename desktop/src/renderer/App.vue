@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import DashboardPage from './pages/DashboardPage.vue'
+import DuplicatesPage from './pages/DuplicatesPage.vue'
 import FilesPage from './pages/FilesPage.vue'
 import ScanPage from './pages/ScanPage.vue'
 import Styleguide from './pages/Styleguide.vue'
@@ -8,6 +9,7 @@ import Styleguide from './pages/Styleguide.vue'
 const TABS = [
   { key: 'dashboard', label: '仪表盘' },
   { key: 'files', label: '文件' },
+  { key: 'duplicates', label: '重复' },
   { key: 'scan', label: '扫描' },
   { key: 'styleguide', label: '组件' },
 ] as const
@@ -32,6 +34,7 @@ const tab = ref<(typeof TABS)[number]['key']>('dashboard')
     <main class="content">
       <DashboardPage v-show="tab === 'dashboard'" />
       <FilesPage v-show="tab === 'files'" />
+      <DuplicatesPage v-show="tab === 'duplicates'" />
       <ScanPage v-show="tab === 'scan'" />
       <Styleguide v-show="tab === 'styleguide'" />
     </main>

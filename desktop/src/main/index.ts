@@ -52,6 +52,18 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('api:thumb', (_event, target: string, size?: number) => apiThumb(target, size))
     ipcMain.handle('api:post', (_event, target: string, body?: unknown) => apiPost(target, body))
     ipcMain.handle('file:readText', (_event, target: string) => readTextHead(target))
+    ipcMain.handle('dialog:confirm', async (_event, title: string, message: string) => {
+      const { response } = await dialog.showMessageBox({
+        type: 'warning',
+        buttons: ['取消', '确认'],
+        defaultId: 0,
+        cancelId: 0,
+        title: String(title).slice(0, 80),
+        message: String(title).slice(0, 200),
+        detail: String(message).slice(0, 1000),
+      })
+      return response === 1
+    })
     ipcMain.handle('dialog:pickDirectory', async () => {
       const result = await dialog.showOpenDialog({
         properties: ['openDirectory'],
@@ -110,6 +122,14 @@ if (!app.requestSingleInstanceLock()) {
               })()
             `)
             await new Promise((r) => setTimeout(r, 2500))
+          }
+
+          // 打开第一个重复组（选择器含空格，用固定标志避免命令行拆分）
+          if (process.argv.includes('--shot-group')) {
+            await win!.webContents.executeJavaScript(
+              `document.querySelector('.groups li')?.click()`,
+            )
+            await new Promise((r) => setTimeout(r, 1200))
           }
 
           if (process.argv.includes('--shot-perf')) {
