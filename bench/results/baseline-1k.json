@@ -1,0 +1,23 @@
+{
+  "dataset": {
+    "files": 1100,
+    "mb": 85.1
+  },
+  "metrics": {
+    "scan_files_per_s": 127999,
+    "scan_s": 0.009,
+    "hash_mb_per_s": 194.3,
+    "cosine_2k_x768_ms": 80.8,
+    "cosine_per_query_us": 40.4,
+    "group_1500_s": 0.236,
+    "sqlite_per_row_5k_s": 0.1,
+    "sqlite_batch_5k_s": 0.003,
+    "page_first_ms": 0.04,
+    "page_deep_ms": 0.6
+  },
+  "env": {
+    "python": "3.14.9",
+    "platform": "Windows-11-10.0.26300-SP0",
+    "cpu_count": 12
+  }
+}

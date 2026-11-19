@@ -1,0 +1,14 @@
+{
+  "root": "bench\\data\\20k",
+  "files": 22000,
+  "mb": 164.3,
+  "workers": 8,
+  "scan_legacy_s": 0.119,
+  "scan_engine_s": 0.073,
+  "scan_speedup": 1.64,
+  "hash_serial_s": 1.324,
+  "hash_parallel_s": 0.873,
+  "hash_speedup": 1.52,
+  "hash_mb_per_s_serial": 124.2,
+  "hash_mb_per_s_parallel": 188.3
+}
