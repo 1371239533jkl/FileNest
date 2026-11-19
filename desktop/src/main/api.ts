@@ -7,6 +7,8 @@ const GET_ALLOWED = [
   /^\/api\/files(\?|$)/,
   /^\/api\/duplicates(\?|$)/,
   /^\/api\/duplicates\/\d+$/,
+  /^\/api\/recycle(\?|$)/,
+  /^\/api\/history(\?|$)/,
   /^\/api\/tags\/full(\?|$)/,
 ]
 const POST_ALLOWED = [
@@ -15,6 +17,8 @@ const POST_ALLOWED = [
   /^\/api\/duplicates\/clean$/,
   /^\/api\/duplicates\/\d+\/suggest(\?|$)/,
   /^\/api\/dedup\/start(\?|$)/,
+  /^\/api\/files\/\d+\/restore$/,
+  /^\/api\/history\/\d+\/undo$/,
 ]
 
 export interface ApiResult {

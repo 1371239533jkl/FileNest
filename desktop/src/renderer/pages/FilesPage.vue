@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import AppButton from '../components/AppButton.vue'
 import DataTable, { type Column } from '../components/DataTable.vue'
-import { formatBytes, formatTime } from '../lib/format'
+import { formatBytes, formatTime, TYPE_NAMES, typeName } from '../lib/format'
 
 const PAGE = 200
 const TEXT_EXT = /\.(txt|md|log|json|csv|py|js|ts|vue|ya?ml|ini|cfg|toml|sql|html|css|sh)$/i
@@ -19,10 +19,6 @@ const TYPE_COLORS: Record<string, string> = {
   image: '#cba6f7', document: '#89b4fa', code: '#a6e3a1', video: '#f9e2af',
   audio: '#f38ba8', archive: '#fab387', executable: '#94e2d5', font: '#b4befe',
   other: '#6b6b7b',
-}
-const TYPE_NAMES: Record<string, string> = {
-  image: '图片', document: '文档', code: '代码', video: '视频', audio: '音频',
-  archive: '压缩包', executable: '可执行', font: '字体', other: '其他',
 }
 const TYPE_OPTIONS = Object.entries(TYPE_NAMES)
 
@@ -216,7 +212,7 @@ onMounted(() => fetchPage(true))
           </span>
         </template>
         <template #cell-file_type="{ row }">
-          <span class="muted">{{ TYPE_NAMES[row.file_type] || row.file_type }}</span>
+          <span class="muted">{{ typeName(row.file_type) }}</span>
         </template>
         <template #cell-file_size="{ row }">
           <span class="muted">{{ formatBytes(row.file_size) }}</span>
@@ -240,7 +236,7 @@ onMounted(() => fetchPage(true))
           </div>
 
           <dl class="meta">
-            <dt>类型</dt><dd>{{ TYPE_NAMES[selected.file_type] || selected.file_type }}</dd>
+            <dt>类型</dt><dd>{{ typeName(selected.file_type) }}</dd>
             <dt>大小</dt><dd>{{ formatBytes(selected.file_size) }}</dd>
             <dt>修改</dt><dd>{{ formatTime(selected.modify_time) }}</dd>
             <dt>路径</dt><dd class="path-cell">{{ selected.file_path }}</dd>

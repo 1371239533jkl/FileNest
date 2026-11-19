@@ -5,7 +5,13 @@ import { apiGet, apiPost, apiThumb } from './api'
 import { readTextHead } from './files'
 import { getSidecarInfo, startSidecar, stopSidecar } from './sidecar'
 
-const SHOT = process.argv.find((arg) => arg.startsWith('--shot='))?.split('=')[1]
+// 只按第一个 '=' 切分：参数值里可能再含 '='（如 CSS 选择器 [data-seg=ops]）
+function argValue(prefix: string): string | undefined {
+  const hit = process.argv.find((arg) => arg.startsWith(prefix))
+  return hit === undefined ? undefined : hit.slice(prefix.length)
+}
+
+const SHOT = argValue('--shot=')
 
 const SMOKE = process.argv.includes('--smoke')
 let win: BrowserWindow | null = null
@@ -87,17 +93,13 @@ if (!app.requestSingleInstanceLock()) {
       win.webContents.once('did-finish-load', async () => {
         win?.show()
         await new Promise((r) => setTimeout(r, 1500))
-        const tabArg = process.argv
-          .find((arg) => arg.startsWith('--shot-tab='))
-          ?.split('=')[1]
+        const tabArg = argValue('--shot-tab=')
         if (tabArg && /^[a-z-]+$/.test(tabArg)) {
           await win!.webContents.executeJavaScript(
             `document.querySelector('[data-tab="${tabArg}"]')?.click()`,
           )
           await new Promise((r) => setTimeout(r, 1500))
-          const rowArg = process.argv
-            .find((arg) => arg.startsWith('--shot-row='))
-            ?.split('=')[1]
+          const rowArg = argValue('--shot-row=')
           if (rowArg !== undefined) {
             const needle = JSON.stringify(rowArg)
             await win!.webContents.executeJavaScript(
@@ -107,9 +109,7 @@ if (!app.requestSingleInstanceLock()) {
             )
             await new Promise((r) => setTimeout(r, 900))
           }
-          const scanArg = process.argv
-            .find((arg) => arg.startsWith('--shot-scan='))
-            ?.split('=')[1]
+          const scanArg = argValue('--shot-scan=')
           if (scanArg) {
             await win!.webContents.executeJavaScript(`
               (() => {
@@ -122,6 +122,19 @@ if (!app.requestSingleInstanceLock()) {
               })()
             `)
             await new Promise((r) => setTimeout(r, 2500))
+          }
+
+          // 通用点击（选择器不能含空格，否则会被命令行拆开）
+          const clickArg = argValue('--shot-click=')
+          if (clickArg) {
+            const found = await win!.webContents.executeJavaScript(
+              `!!document.querySelector(${JSON.stringify(clickArg)})`,
+            )
+            console.log(`[shot] click ${clickArg} found=${found}`)
+            await win!.webContents.executeJavaScript(
+              `document.querySelector(${JSON.stringify(clickArg)})?.click()`,
+            )
+            await new Promise((r) => setTimeout(r, 1200))
           }
 
           // 打开第一个重复组（选择器含空格，用固定标志避免命令行拆分）

@@ -216,6 +216,49 @@ def test_dedup_detection_creates_group(tmp_path):
         _teardown(path)
 
 
+def test_delete_then_restore(tmp_path):
+    """删除进回收区 → 恢复回原位，文件与数据库状态都要一致。"""
+    path = _prepare_db()
+    root = tmp_path / 'rec'
+    root.mkdir()
+    target = root / 'keepme.txt'
+    target.write_bytes(b'hello')
+
+    try:
+        with TestClient(server.app) as client:
+            task_id = client.post(
+                '/api/scan/start',
+                json={'directory': str(root), 'compute_hash': False},
+            ).json()['task_id']
+            for _ in range(200):
+                if client.get(f'/api/tasks/{task_id}').json()['status'] != 'running':
+                    break
+                time.sleep(0.05)
+
+            file_id = dbm.db.execute_one(
+                "SELECT id FROM files WHERE file_name='keepme.txt'")['id']
+
+            deleted = client.post('/api/files/delete', params={'file_id': file_id})
+            assert deleted.status_code == 200, deleted.text
+            assert not target.exists()
+
+            recycle = client.get('/api/recycle').json()
+            assert recycle['total'] == 1
+
+            restored = client.post(
+                f'/api/files/{file_id}/restore',
+                json={'conflict_strategy': 'rename'},
+            )
+            assert restored.status_code == 200, restored.text
+            assert target.exists()
+
+            assert client.get('/api/recycle').json()['total'] == 0
+            history = client.get('/api/history').json()
+            assert any(item['operation_type'] == 'delete' for item in history['items'])
+    finally:
+        _teardown(path)
+
+
 def test_thumb_returns_jpeg(tmp_path):
     from PIL import Image
 
