@@ -1471,7 +1471,11 @@ def ai_chat_stream(body: ChatStreamBody,
     def gen():
         try:
             fdao = FileDAO(db)
+            # 整句自然语言按文件名匹配多半 0 命中；此时退化为"最近入库的文件"，
+            # 至少让模型有真实上下文，而不是回答"库里没有文件"。
             rows = (fdao.search(name=message) or [])[:20]
+            if not rows:
+                rows = fdao.get_page_after(None, page_size=20) or []
             yield _sse({'type': 'meta', 'matches': len(rows)})
 
             layer = _ai_layer()
@@ -1480,7 +1484,8 @@ def ai_chat_stream(body: ChatStreamBody,
                 return
 
             files_text = '\n'.join(
-                f"- {r.get('file_name')} | {_fmt_size(r.get('file_size'))} | {r.get('file_path')}"
+                f"- {r.get('file_name')} | {_fmt_size(r.get('file_size'))} | "
+                f"修改时间 {r.get('modify_time')} | {r.get('file_path')}"
                 for r in rows[:10]) or '（未匹配到文件）'
             messages = [
                 {'role': 'system',

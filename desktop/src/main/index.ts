@@ -199,7 +199,7 @@ if (!app.requestSingleInstanceLock()) {
             await win!.webContents.executeJavaScript(
               `document.querySelector('[data-send]')?.click()`,
             )
-            await new Promise((r) => setTimeout(r, 6000))
+            await new Promise((r) => setTimeout(r, 20000))
           }
 
           // 通用点击（选择器不能含空格，否则会被命令行拆开）
