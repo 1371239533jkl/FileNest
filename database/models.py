@@ -86,6 +86,24 @@ class FileDAO:
         sql = "SELECT * FROM files WHERE status = 'active' ORDER BY scan_time DESC LIMIT ? OFFSET ?"
         return self.db.execute_query(sql, (page_size, offset))
 
+    def get_page_after(self, cursor: Optional[tuple] = None, page_size: int = 200) -> list:
+        """keyset 分页：按 (scan_time, id) 倒序，避免深 OFFSET。
+
+        cursor 传上一页最后一行的 (scan_time, id)；首屏传 None。
+        依赖 idx_status_scan_time；只取列表需要的列，不 SELECT *。
+        """
+        cols = ("id, file_name, file_path, file_extension, file_type, file_size, "
+                "create_time, modify_time, scan_time, is_duplicate, duplicate_group_id")
+        if cursor:
+            return self.db.execute_query(
+                f"SELECT {cols} FROM files WHERE status = 'active' "
+                "AND (scan_time, id) < (?, ?) "
+                "ORDER BY scan_time DESC, id DESC LIMIT ?",
+                (cursor[0], cursor[1], page_size))
+        return self.db.execute_query(
+            f"SELECT {cols} FROM files WHERE status = 'active' "
+            "ORDER BY scan_time DESC, id DESC LIMIT ?", (page_size,))
+
     def update_name(self, file_id: int, new_name: str, new_path: str) -> int:
         sql = "UPDATE files SET file_name = ?, file_path = ? WHERE id = ?"
         return self.db.execute_update(sql, (new_name, new_path, file_id))
