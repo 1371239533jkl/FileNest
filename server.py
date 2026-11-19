@@ -76,21 +76,26 @@ except ImportError:
     sys.modules['PyQt6'] = _pyqt6
     sys.modules['PyQt6.QtCore'] = _qtcore
 
+import json
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from config import FILE_TYPES
+from config import APP_VERSION
 from database.db_manager import db
 from database.models import (
     FileDAO, TagDAO, LifecyclePolicyDAO, MetadataDAO, ClassificationDAO,
     VersionRelationDAO,
 )
+from core.scan_service import ScanService
 from core.tag_manager import TagManager
+from core.task_runner import TaskRunner
 from core.lifecycle_service import LifecycleService
 from web_api import router as web_router
 
@@ -127,33 +132,6 @@ def _auth(x_api_key: Optional[str]):
         raise HTTPException(status_code=401, detail='无效的 API Key')
 
 
-# ── 文件信息（与 core.file_scanner.get_file_info 等价的纯函数本地实现，
-#     避免 import 该模块时触发其模块级 PyQt6 依赖，服务器无 GUI 环境可用）──
-
-def _get_file_type(extension: str) -> str:
-    ext = extension.lower()
-    for ftype, extensions in FILE_TYPES.items():
-        if ext in extensions:
-            return ftype
-    return 'other'
-
-
-def _get_file_info(file_path: str) -> dict:
-    p = Path(file_path)
-    stat = p.stat()
-    ext = p.suffix.lower()
-    return {
-        'file_path': str(p),
-        'file_name': p.name,
-        'original_name': None,
-        'file_extension': ext,
-        'file_type': _get_file_type(ext),
-        'file_size': stat.st_size,
-        'create_time': datetime.fromtimestamp(stat.st_ctime),
-        'modify_time': datetime.fromtimestamp(stat.st_mtime),
-    }
-
-
 # ── 请求模型 ──────────────────────────────────────────────────
 
 class ScanReq(BaseModel):
@@ -173,7 +151,8 @@ class LifecycleRunReq(BaseModel):
 
 @app.get('/health')
 def health():
-    return {'status': 'ok', 'service': 'smart-file-manager'}
+    return {'status': 'ok', 'service': 'smart-file-manager',
+            'version': APP_VERSION, 'pid': os.getpid()}
 
 
 # ── 扫描 / 搜索 / 详情 ───────────────────────────────────────
@@ -185,23 +164,75 @@ def scan(req: ScanReq, x_api_key: Optional[str] = Header(None)):
     if not os.path.isdir(directory):
         raise HTTPException(status_code=400, detail=f'目录不存在: {directory}')
 
-    dao = FileDAO(db)
-    indexed, skipped, errors = 0, 0, []
-    walker = os.walk(directory) if req.recursive else [
-        (directory, [], os.listdir(directory))]
-    for root, _dirs, files in walker:
-        for fn in files:
-            full = os.path.join(root, fn)
-            if not os.path.isfile(full):
-                continue
-            try:
-                dao.insert(_get_file_info(full))
-                indexed += 1
-            except Exception as e:  # noqa: BLE001
-                skipped += 1
-                if len(errors) < 10:
-                    errors.append(f'{full}: {e}')
-    return {'indexed': indexed, 'skipped': skipped, 'errors': errors}
+    result = ScanService(db).scan(
+        directory, recursive=req.recursive, compute_hash=False)
+    return {'indexed': result['written'], 'skipped': 0, 'errors': [],
+            'elapsed_s': result['elapsed_s']}
+
+
+# ── 后台任务（T1-2）：长任务 + SSE 进度 ─────────────────────────
+TASKS = TaskRunner()
+
+
+class ScanStartReq(BaseModel):
+    directory: str
+    recursive: bool = True
+    compute_hash: bool = True
+
+
+@app.post('/api/scan/start')
+def scan_start(req: ScanStartReq, x_api_key: Optional[str] = Header(None)):
+    _auth(x_api_key)
+    if not os.path.isdir(req.directory):
+        raise HTTPException(status_code=400, detail=f'目录不存在: {req.directory}')
+
+    def job(progress, cancel_event):
+        return ScanService(db).scan(
+            req.directory, recursive=req.recursive,
+            compute_hash=req.compute_hash,
+            progress=progress, cancel=cancel_event.is_set)
+
+    task = TASKS.submit(f'scan:{req.directory}', job)
+    return {'task_id': task.id}
+
+
+@app.post('/api/scan/cancel')
+def scan_cancel(task_id: int, x_api_key: Optional[str] = Header(None)):
+    _auth(x_api_key)
+    if not TASKS.cancel(task_id):
+        raise HTTPException(status_code=404, detail='任务不存在或已结束')
+    return {'cancelled': True}
+
+
+@app.get('/api/tasks')
+def task_list(x_api_key: Optional[str] = Header(None)):
+    _auth(x_api_key)
+    return TASKS.snapshot()
+
+
+@app.get('/api/tasks/{task_id}')
+def task_detail(task_id: int, x_api_key: Optional[str] = Header(None)):
+    _auth(x_api_key)
+    task = TASKS.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail='任务不存在')
+    return task
+
+
+@app.get('/api/events')
+def events():
+    """SSE 推送任务快照；没有运行中任务时发一帧后关闭，客户端按需重连。"""
+    def stream():
+        while True:
+            snapshot = TASKS.snapshot()
+            yield 'data: ' + json.dumps(snapshot, ensure_ascii=False) + '\n\n'
+            if not snapshot['running']:
+                return
+            time.sleep(0.3)
+
+    return StreamingResponse(
+        stream(), media_type='text/event-stream',
+        headers={'Cache-Control': 'no-cache'})
 
 
 @app.get('/api/search')
