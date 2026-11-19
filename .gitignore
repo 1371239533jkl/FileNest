@@ -83,3 +83,8 @@ desktop/packaging/*.spec
 # 构建日志
 desktop/*.log
 desktop/packaging/*.log
+
+# 项目规则入库（其余 .codebuddy 内容仍忽略）
+!.codebuddy/
+!.codebuddy/rules/
+!.codebuddy/rules/**
