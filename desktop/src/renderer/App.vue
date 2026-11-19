@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import ChatPage from './pages/ChatPage.vue'
+import ClassificationPage from './pages/ClassificationPage.vue'
 import DashboardPage from './pages/DashboardPage.vue'
 import DuplicatesPage from './pages/DuplicatesPage.vue'
 import FilesPage from './pages/FilesPage.vue'
@@ -15,6 +16,7 @@ const TABS = [
   { key: 'files', label: '文件' },
   { key: 'chat', label: 'AI' },
   { key: 'duplicates', label: '重复' },
+  { key: 'classification', label: '分类' },
   { key: 'tags', label: '标签' },
   { key: 'scan', label: '扫描' },
   { key: 'history', label: '历史' },
@@ -44,6 +46,7 @@ const tab = ref<(typeof TABS)[number]['key']>('dashboard')
       <FilesPage v-show="tab === 'files'" />
       <ChatPage v-show="tab === 'chat'" />
       <DuplicatesPage v-show="tab === 'duplicates'" />
+      <ClassificationPage v-show="tab === 'classification'" />
       <TagsPage v-show="tab === 'tags'" />
       <ScanPage v-show="tab === 'scan'" />
       <HistoryPage v-show="tab === 'history'" />

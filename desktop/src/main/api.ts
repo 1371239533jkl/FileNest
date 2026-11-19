@@ -12,6 +12,7 @@ const GET_ALLOWED = [
   /^\/api\/tags\/full(\?|$)/,
   /^\/api\/ai\/providers(\?|$)/,
   /^\/api\/settings(\?|$)/,
+  /^\/api\/classification(\?|$)/,
 ]
 const POST_ALLOWED = [
   /^\/api\/scan\/start$/,
@@ -26,8 +27,15 @@ const POST_ALLOWED = [
   /^\/api\/ai\/providers(\?|$)/,
   /^\/api\/ai\/providers\/[^/]+\/(activate|test)(\?|$)/,
   /^\/api\/settings(\?|$)/,
+  /^\/api\/classification\/apply(\?|$)/,
+  /^\/api\/classification\/rules$/,
+  /^\/api\/classification\/rules\/\d+\/toggle(\?|$)/,
 ]
-const DELETE_ALLOWED = [/^\/api\/tags\/[^/?]+$/, /^\/api\/ai\/providers\/[^/]+$/]
+const DELETE_ALLOWED = [
+  /^\/api\/tags\/[^/?]+$/,
+  /^\/api\/ai\/providers\/[^/]+$/,
+  /^\/api\/classification\/rules\/\d+$/,
+]
 
 export interface ApiResult {
   ok: boolean

@@ -198,6 +198,42 @@ def scan_start(req: ScanStartReq, x_api_key: Optional[str] = Header(None)):
     return {'task_id': task.id}
 
 
+@app.post('/api/classification/apply')
+def classification_apply(limit: int = 0, x_api_key: Optional[str] = Header(None)):
+    """按规则重跑分类：后台任务，逐文件上报进度。"""
+    _auth(x_api_key)
+
+    def job(progress, cancel_event):
+        from core.file_classifier import FileClassifier
+        from database.db_manager import db as database
+        from database.models import ClassificationDAO, FileDAO
+
+        classifier = FileClassifier()
+        cdao = ClassificationDAO(database)
+        files = FileDAO(database).get_all_active() or []
+        if limit > 0:
+            files = files[:limit]
+        total = len(files)
+        stats = {'classified': 0, 'failed': 0, 'total': total}
+        for index, record in enumerate(files):
+            if cancel_event.is_set():
+                break
+            try:
+                result = classifier._classify_file_in_memory(record)
+                if result:
+                    cdao.delete_by_file_id(record['id'])
+                    cdao.batch_insert(
+                        [(record['id'], t, v, conf) for t, v, conf in result])
+                    stats['classified'] += 1
+            except Exception:  # noqa: BLE001
+                stats['failed'] += 1
+            progress(index + 1, total)
+        return stats
+
+    task = TASKS.submit('classify', job)
+    return {'task_id': task.id}
+
+
 @app.post('/api/dedup/start')
 def dedup_start(reset: bool = False, x_api_key: Optional[str] = Header(None)):
     """多阶段重复检测：按大小 → 快速哈希 → 完整哈希分组，结果写回 files 表。"""

@@ -288,6 +288,38 @@ def test_tag_crud():
         _teardown(path)
 
 
+def test_classification_apply_creates_records(tmp_path):
+    """按规则重跑分类：任务完成、分类表有记录、分布接口能读到。"""
+    path = _prepare_db()
+    root = tmp_path / 'cls'
+    root.mkdir()
+    (root / 'note.txt').write_text('hello', encoding='utf-8')
+    (root / 'data.json').write_text('{"a": 1}', encoding='utf-8')
+
+    try:
+        with TestClient(server.app) as client:
+            scan_id = client.post(
+                '/api/scan/start',
+                json={'directory': str(root), 'compute_hash': False},
+            ).json()['task_id']
+            for _ in range(200):
+                if client.get(f'/api/tasks/{scan_id}').json()['status'] != 'running':
+                    break
+                time.sleep(0.05)
+
+            task_id = client.post('/api/classification/apply').json()['task_id']
+            for _ in range(400):
+                if client.get(f'/api/tasks/{task_id}').json()['status'] != 'running':
+                    break
+                time.sleep(0.05)
+
+            body = client.get('/api/classification').json()
+            total = sum(item['count'] for values in body['types'].values() for item in values)
+            assert total >= 2, body
+    finally:
+        _teardown(path)
+
+
 def test_thumb_returns_jpeg(tmp_path):
     from PIL import Image
 

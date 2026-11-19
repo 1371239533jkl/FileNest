@@ -485,13 +485,21 @@ class DBManager:
                 ('include_hidden', '0', 'bool', '包含隐藏文件', now),
                 ('max_hash_size_mb', '500', 'int', '计算哈希的最大文件大小(MB)', now),
             ])
+        # 规则表没有 rule_name 唯一约束，原先的 INSERT OR IGNORE 每次启动都会重复插入
+        # （实测 195 行 / 7 个名字）。这里先按名字去重，再只补缺失的默认规则。
+        conn.execute(
+            "DELETE FROM classification_rules WHERE id NOT IN "
+            "(SELECT MIN(id) FROM classification_rules GROUP BY rule_name)")
         conn.executemany(
-            "INSERT OR IGNORE INTO classification_rules (rule_name, rule_type, rule_pattern, target_category, priority, is_enabled, create_time) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO classification_rules "
+            "(rule_name, rule_type, rule_pattern, target_category, priority, is_enabled, create_time) "
+            "SELECT ?, ?, ?, ?, ?, ?, ? "
+            "WHERE NOT EXISTS (SELECT 1 FROM classification_rules WHERE rule_name = ?)",
             [
-                ('工作文件', 'keyword', '报告|会议|方案|合同|发票|report|meeting|invoice', '工作', 10, 1, now),
-                ('学习资料', 'keyword', '笔记|课件|作业|论文|note|homework|thesis', '学习', 10, 1, now),
-                ('生活照片', 'keyword', '照片|旅游|美食|photo|travel|food', '生活', 10, 1, now),
-                ('项目文件', 'keyword', '代码|设计|需求|测试|code|design|test', '项目', 10, 1, now),
+                ('工作文件', 'keyword', '报告|会议|方案|合同|发票|report|meeting|invoice', '工作', 10, 1, now, '工作文件'),
+                ('学习资料', 'keyword', '笔记|课件|作业|论文|note|homework|thesis', '学习', 10, 1, now, '学习资料'),
+                ('生活照片', 'keyword', '照片|旅游|美食|photo|travel|food', '生活', 10, 1, now, '生活照片'),
+                ('项目文件', 'keyword', '代码|设计|需求|测试|code|design|test', '项目', 10, 1, now, '项目文件'),
             ])
         conn.commit()
         logger.info("SQLite 数据库初始化完成")
