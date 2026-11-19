@@ -20,11 +20,13 @@ declare global {
     api: {
       health: () => Promise<SidecarInfo>
       get: (path: string) => Promise<ApiResult>
+      post: (path: string, body?: unknown) => Promise<ApiResult>
       open: (path: string) => Promise<string>
       reveal: (path: string) => Promise<void>
       copy: (text: string) => Promise<void>
       thumb: (path: string, size?: number) => Promise<ApiResult>
       readText: (path: string) => Promise<{ ok: boolean; data?: string; error?: string }>
+      pickDirectory: () => Promise<string>
     }
   }
 }

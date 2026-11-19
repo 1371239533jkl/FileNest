@@ -25,6 +25,9 @@ class ScanService:
         started = time.perf_counter()
         records = scan_engine.collect(root, recursive=recursive)
         total = len(records)
+        if progress:
+            # 先报总量，避免哈希阶段界面一直显示 0/?
+            progress(0, total)
 
         hashed = 0
         if compute_hash and records:

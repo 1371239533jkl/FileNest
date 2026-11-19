@@ -1,7 +1,7 @@
-import { app, BrowserWindow, clipboard, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
-import { apiGet, apiThumb } from './api'
+import { apiGet, apiPost, apiThumb } from './api'
 import { readTextHead } from './files'
 import { getSidecarInfo, startSidecar, stopSidecar } from './sidecar'
 
@@ -50,7 +50,15 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('shell:reveal', (_event, target: string) => shell.showItemInFolder(target))
     ipcMain.handle('clipboard:write', (_event, text: string) => clipboard.writeText(String(text)))
     ipcMain.handle('api:thumb', (_event, target: string, size?: number) => apiThumb(target, size))
+    ipcMain.handle('api:post', (_event, target: string, body?: unknown) => apiPost(target, body))
     ipcMain.handle('file:readText', (_event, target: string) => readTextHead(target))
+    ipcMain.handle('dialog:pickDirectory', async () => {
+      const result = await dialog.showOpenDialog({
+        properties: ['openDirectory'],
+        title: '选择要扫描的目录',
+      })
+      return result.canceled ? '' : result.filePaths[0]
+    })
 
     win = createWindow()
 
@@ -87,6 +95,23 @@ if (!app.requestSingleInstanceLock()) {
             )
             await new Promise((r) => setTimeout(r, 900))
           }
+          const scanArg = process.argv
+            .find((arg) => arg.startsWith('--shot-scan='))
+            ?.split('=')[1]
+          if (scanArg) {
+            await win!.webContents.executeJavaScript(`
+              (() => {
+                const input = document.querySelector('input.dir')
+                const setter = Object.getOwnPropertyDescriptor(
+                  HTMLInputElement.prototype, 'value').set
+                setter.call(input, ${JSON.stringify(scanArg)})
+                input.dispatchEvent(new Event('input', { bubbles: true }))
+                document.querySelector('.form .btn.primary')?.click()
+              })()
+            `)
+            await new Promise((r) => setTimeout(r, 2500))
+          }
+
           if (process.argv.includes('--shot-perf')) {
             const perf = await win!.webContents.executeJavaScript(
               `window.__scrollPerf ? window.__scrollPerf() : null`,
