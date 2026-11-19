@@ -1,0 +1,46 @@
+{
+  "name": "filenest-desktop",
+  "productName": "FileNest",
+  "version": "0.1.0",
+  "private": true,
+  "author": "FileNest",
+  "description": "FileNest desktop shell (Electron + Vue 3 + TypeScript)",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "build:main": "tsc -p tsconfig.main.json",
+    "build:renderer": "vite build",
+    "build": "npm run build:main && npm run build:renderer",
+    "build:sidecar": "packaging\\build-sidecar.cmd",
+    "package": "npm run build && npm run build:sidecar && electron-builder --dir",
+    "start": "electron .",
+    "smoke": "electron . --smoke"
+  },
+  "build": {
+    "appId": "com.filenest.app",
+    "productName": "FileNest",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "packaging/dist/filenest-service",
+        "to": "sidecar"
+      }
+    ],
+    "win": {
+      "target": "dir"
+    }
+  },
+  "devDependencies": {
+    "vue": "^3.5.45",
+    "@types/node": "^26.6.6",
+    "@vitejs/plugin-vue": "^6.0.11",
+    "electron": "^45.3.4",
+    "electron-builder": "^26.18.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  }
+}
