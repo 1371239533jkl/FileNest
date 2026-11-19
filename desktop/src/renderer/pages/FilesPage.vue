@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import AppButton from '../components/AppButton.vue'
 import DataTable, { type Column } from '../components/DataTable.vue'
 import { formatBytes, formatTime } from '../lib/format'
@@ -24,11 +24,14 @@ const TYPE_NAMES: Record<string, string> = {
   image: '图片', document: '文档', code: '代码', video: '视频', audio: '音频',
   archive: '压缩包', executable: '可执行', font: '字体', other: '其他',
 }
+const TYPE_OPTIONS = Object.entries(TYPE_NAMES)
 
 const rows = ref<any[]>([])
 const loading = ref(false)
 const error = ref('')
 const nextCursor = ref<string | null>('')
+const total = ref<number | null>(null)
+const page = ref(0)
 const menu = ref<{ x: number; y: number; row: any } | null>(null)
 
 const selected = ref<any | null>(null)
@@ -36,20 +39,85 @@ const thumb = ref('')
 const snippet = ref('')
 const note = ref('')
 
-async function loadMore() {
-  if (loading.value || nextCursor.value === null) return
+const keyword = ref('')
+const scope = ref<'name' | 'content'>('name')
+const typeFilter = ref('')
+const minKb = ref('')
+const maxKb = ref('')
+const startDate = ref('')
+const endDate = ref('')
+
+const filtered = computed(
+  () =>
+    !!keyword.value.trim() || !!typeFilter.value || !!minKb.value ||
+    !!maxKb.value || !!startDate.value || !!endDate.value,
+)
+
+function buildQuery(reset: boolean) {
+  if (!filtered.value) {
+    return `/api/files?page_size=${PAGE}&cursor=${encodeURIComponent(
+      reset ? '' : nextCursor.value || '',
+    )}`
+  }
+  const params = new URLSearchParams({
+    page: String(reset ? 0 : page.value),
+    page_size: String(PAGE),
+  })
+  const word = keyword.value.trim()
+  if (word) params.set(scope.value === 'content' ? 'content' : 'name', word)
+  if (typeFilter.value) params.set('file_type', typeFilter.value)
+  if (minKb.value) params.set('min_size', String(Number(minKb.value) * 1024))
+  if (maxKb.value) params.set('max_size', String(Number(maxKb.value) * 1024))
+  if (startDate.value) params.set('start_date', startDate.value)
+  // 让"截止日"包含当天整天
+  if (endDate.value) params.set('end_date', `${endDate.value} 23:59:59`)
+  return `/api/files?${params.toString()}`
+}
+
+async function fetchPage(reset = false) {
+  if (loading.value) return
+  if (!reset && !filtered.value && nextCursor.value === null) return
+  if (!reset && filtered.value && total.value !== null && rows.value.length >= total.value) return
+
+  if (reset) {
+    rows.value = []
+    page.value = 0
+    nextCursor.value = ''
+    total.value = null
+    error.value = ''
+  }
+
   loading.value = true
-  const suffix = `&cursor=${encodeURIComponent(nextCursor.value || '')}`
-  const res = await window.api.get(`/api/files?page_size=${PAGE}${suffix}`)
+  const res = await window.api.get(buildQuery(reset))
   if (res.ok) {
-    const data = res.data as { items?: any[]; next_cursor?: string | null }
+    const data = res.data as {
+      items?: any[]
+      next_cursor?: string | null
+      total?: number | null
+    }
     rows.value = rows.value.concat(data.items || [])
-    nextCursor.value = data.next_cursor ?? null
+    total.value = data.total ?? null
+    if (filtered.value) {
+      page.value += 1
+    } else {
+      nextCursor.value = data.next_cursor ?? null
+    }
   } else {
     error.value = res.error || `HTTP ${res.status}`
-    nextCursor.value = null
+    if (!filtered.value) nextCursor.value = null
   }
   loading.value = false
+}
+
+function resetFilters() {
+  keyword.value = ''
+  scope.value = 'name'
+  typeFilter.value = ''
+  minKb.value = ''
+  maxKb.value = ''
+  startDate.value = ''
+  endDate.value = ''
+  void fetchPage(true)
 }
 
 async function selectRow(row: any) {
@@ -84,7 +152,7 @@ async function runAction(action: 'open' | 'reveal' | 'copy') {
   if (action === 'copy') await window.api.copy(row.file_path)
 }
 
-onMounted(loadMore)
+onMounted(() => fetchPage(true))
 </script>
 
 <template>
@@ -92,9 +160,38 @@ onMounted(loadMore)
     <header class="page-head">
       <div>
         <h1>文件</h1>
-        <p>已加载 {{ rows.length }} 条{{ nextCursor === null ? '（已到底）' : '' }}</p>
+        <p>
+          已加载 {{ rows.length }} 条
+          <template v-if="filtered && total !== null"> / 共 {{ total }} 条</template>
+          <template v-else-if="nextCursor === null">（已到底）</template>
+        </p>
       </div>
     </header>
+
+    <div class="filters">
+      <input
+        v-model="keyword"
+        class="field grow-field"
+        placeholder="文件名 / 正文关键词"
+        @keyup.enter="fetchPage(true)"
+      />
+      <select v-model="scope" class="field">
+        <option value="name">文件名</option>
+        <option value="content">正文</option>
+      </select>
+      <select v-model="typeFilter" class="field">
+        <option value="">全部类型</option>
+        <option v-for="[value, label] in TYPE_OPTIONS" :key="value" :value="value">
+          {{ label }}
+        </option>
+      </select>
+      <input v-model="minKb" class="field size" type="number" min="0" placeholder="最小 KB" />
+      <input v-model="maxKb" class="field size" type="number" min="0" placeholder="最大 KB" />
+      <input v-model="startDate" class="field date" type="date" />
+      <input v-model="endDate" class="field date" type="date" />
+      <AppButton variant="primary" :disabled="loading" @click="fetchPage(true)">查询</AppButton>
+      <AppButton variant="ghost" :disabled="loading" @click="resetFilters">重置</AppButton>
+    </div>
 
     <p v-if="error" class="error">加载失败：{{ error }}</p>
 
@@ -106,9 +203,9 @@ onMounted(loadMore)
         :loading="loading"
         :active-key="selected?.id ?? null"
         perf
-        empty-text="还没有扫描数据，先在扫描页建个索引"
+        :empty-text="filtered ? '没有符合条件的文件' : '还没有扫描数据，先在扫描页建个索引'"
         @row-click="selectRow"
-        @scroll-near-end="loadMore"
+        @scroll-near-end="fetchPage()"
         @row-dblclick="(row) => window.api.open(row.file_path)"
         @row-contextmenu="({ event, row }) => openMenu(event, row)"
       >
@@ -172,13 +269,32 @@ onMounted(loadMore)
 .page {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-3);
   height: calc(100vh - 52px - var(--space-5) * 2);
 }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; }
 h1 { margin: 0; font-size: 20px; }
 .page-head p { margin: 2px 0 0; color: var(--dim); font-size: 12px; }
 .error { margin: 0; padding: 10px 12px; color: #fecaca; background: #3f1d1d; border-radius: var(--radius-sm); }
+
+.filters { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.field {
+  height: 32px;
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.field:focus { border-color: var(--primary); }
+.field::placeholder { color: var(--dim); }
+.grow-field { flex: 1; min-width: 200px; }
+.size { width: 96px; }
+.date { width: 148px; }
+select.field { cursor: pointer; }
 
 .split { display: flex; gap: var(--space-4); flex: 1; min-height: 0; }
 .grow { flex: 1; min-width: 0; }

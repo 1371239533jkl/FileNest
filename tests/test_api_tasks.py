@@ -93,6 +93,39 @@ def test_files_cursor_pagination_has_no_duplicates(tmp_path):
         _teardown(path)
 
 
+def test_files_filters(tmp_path):
+    path = _prepare_db()
+    root = tmp_path / 'filter'
+    root.mkdir()
+    (root / 'alpha_1.txt').write_bytes(b'a' * 10)
+    (root / 'alpha_2.txt').write_bytes(b'a' * 20)
+    (root / 'beta.txt').write_bytes(b'b' * 30)
+
+    try:
+        with TestClient(server.app) as client:
+            task_id = client.post(
+                '/api/scan/start',
+                json={'directory': str(root), 'compute_hash': False},
+            ).json()['task_id']
+            for _ in range(200):
+                if client.get(f'/api/tasks/{task_id}').json()['status'] != 'running':
+                    break
+                time.sleep(0.05)
+
+            by_name = client.get('/api/files', params={'name': 'alpha'}).json()
+            assert by_name['total'] == 2
+            assert {item['file_name'] for item in by_name['items']} == {'alpha_1.txt', 'alpha_2.txt'}
+
+            by_size = client.get('/api/files', params={'min_size': 25}).json()
+            assert by_size['total'] == 1
+            assert by_size['items'][0]['file_name'] == 'beta.txt'
+
+            by_type = client.get('/api/files', params={'file_type': 'image'}).json()
+            assert by_type['total'] == 0 and by_type['items'] == []
+    finally:
+        _teardown(path)
+
+
 def test_thumb_returns_jpeg(tmp_path):
     from PIL import Image
 
