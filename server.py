@@ -76,18 +76,20 @@ except ImportError:
     sys.modules['PyQt6'] = _pyqt6
     sys.modules['PyQt6.QtCore'] = _qtcore
 
+import io
 import json
+import threading
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from config import APP_VERSION
+from config import APP_VERSION, FILE_TYPES
 from database.db_manager import db
 from database.models import (
     FileDAO, TagDAO, LifecyclePolicyDAO, MetadataDAO, ClassificationDAO,
@@ -219,9 +221,40 @@ def task_detail(task_id: int, x_api_key: Optional[str] = Header(None)):
     return task
 
 
+@app.get('/api/thumb')
+def thumb(path: str, size: int = 256, x_api_key: Optional[str] = Header(None)):
+    """返回缩略图 JPEG（解码即缩放，不输出原图）。"""
+    _auth(x_api_key)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail='文件不存在')
+    if os.path.splitext(path)[1].lower() not in FILE_TYPES['image']:
+        raise HTTPException(status_code=400, detail='不是支持的图片格式')
+    size = max(16, min(size, 1024))
+    try:
+        from PIL import Image
+        with Image.open(path) as img:
+            img.thumbnail((size, size))
+            buf = io.BytesIO()
+            img.convert('RGB').save(buf, 'JPEG', quality=82)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f'生成缩略图失败: {exc}')
+    return Response(content=buf.getvalue(), media_type='image/jpeg',
+                    headers={'Cache-Control': 'max-age=3600'})
+
+
+@app.post('/api/shutdown')
+def shutdown(x_api_key: Optional[str] = Header(None)):
+    """优雅退出：先回响应，再结束进程（WAL 已提交的数据不受影响）。"""
+    _auth(x_api_key)
+    threading.Timer(0.3, os._exit, (0,)).start()
+    return {'ok': True}
+
+
 @app.get('/api/events')
-def events():
+def events(x_api_key: Optional[str] = Header(None)):
     """SSE 推送任务快照；没有运行中任务时发一帧后关闭，客户端按需重连。"""
+    _auth(x_api_key)
+
     def stream():
         while True:
             snapshot = TASKS.snapshot()

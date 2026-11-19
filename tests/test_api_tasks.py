@@ -1,4 +1,4 @@
-"""API：后台扫描任务与 SSE 事件流（不依赖 PyQt6）。"""
+"""API：后台扫描任务、SSE、缩略图与 token（不依赖 PyQt6）。"""
 import os
 import tempfile
 import time
@@ -18,6 +18,14 @@ def _prepare_db():
     config.DB_PATH = path
     dbm.db.db_path = path
     return path
+
+
+def _teardown(path):
+    dbm.db.close()
+    try:
+        os.unlink(path)
+    except OSError:
+        pass  # Windows 上连接可能仍被 lifespan 线程持有，交给临时目录清理
 
 
 def test_scan_task_completes_and_events_stream(tmp_path):
@@ -48,8 +56,44 @@ def test_scan_task_completes_and_events_stream(tmp_path):
             assert events.status_code == 200
             assert 'data:' in events.text
     finally:
-        dbm.db.close()
-        try:
-            os.unlink(path)
-        except OSError:
-            pass  # Windows 上连接可能仍被 lifespan 线程持有，交给临时目录清理
+        _teardown(path)
+
+
+def test_thumb_returns_jpeg(tmp_path):
+    from PIL import Image
+
+    path = _prepare_db()
+    image = tmp_path / 'a.png'
+    Image.new('RGB', (400, 300), (10, 20, 30)).save(image)
+    try:
+        with TestClient(server.app) as client:
+            res = client.get('/api/thumb', params={'path': str(image), 'size': 64})
+            assert res.status_code == 200, res.text
+            assert res.headers['content-type'] == 'image/jpeg'
+            assert len(res.content) > 200
+
+            missing = client.get('/api/thumb', params={'path': str(tmp_path / 'nope.png')})
+            assert missing.status_code == 404
+
+            not_image = tmp_path / 'a.txt'
+            not_image.write_text('x', encoding='utf-8')
+            assert client.get(
+                '/api/thumb', params={'path': str(not_image)}).status_code == 400
+    finally:
+        _teardown(path)
+
+
+def test_health_public_but_api_needs_token(tmp_path, monkeypatch):
+    path = _prepare_db()
+    try:
+        with TestClient(server.app) as client:
+            assert client.get('/health').status_code == 200
+
+            monkeypatch.setattr(server, 'API_KEY', 'secret')
+            assert client.get('/api/tasks').status_code == 401
+            assert client.get(
+                '/api/tasks', headers={'x-api-key': 'wrong'}).status_code == 401
+            assert client.get(
+                '/api/tasks', headers={'x-api-key': 'secret'}).status_code == 200
+    finally:
+        _teardown(path)

@@ -54,5 +54,13 @@ if (!app.requestSingleInstanceLock()) {
   })
 
   app.on('window-all-closed', () => app.quit())
-  app.on('before-quit', stopSidecar)
+
+  // 退出前先让 sidecar 优雅收尾（异步），完成后再真正退出
+  let quitting = false
+  app.on('before-quit', (event) => {
+    if (quitting) return
+    quitting = true
+    event.preventDefault()
+    void stopSidecar().finally(() => app.quit())
+  })
 }
