@@ -201,6 +201,7 @@ def file_search(
     content: Optional[str] = None,
     page: int = Query(0, ge=0),
     page_size: int = Query(100, ge=1, le=1000),
+    cursor: Optional[str] = None,   # "scan_time|id"，keyset 分页（仅无筛选的平铺列表）
     x_api_key: Optional[str] = Header(None),
 ):
     _auth(x_api_key)
@@ -218,6 +219,25 @@ def file_search(
             'tags': tdao.get_all_tags_by_file(ids),
             'classifications': _serialize(cdao.get_by_file_ids(ids)),
             'note': 'content 全文检索结果',
+        }
+
+    if cursor is not None:
+        # 空串表示首页；"scan_time|id" 表示游标位置（只用于无筛选的平铺列表）
+        if cursor:
+            scan_time, _, raw_id = cursor.rpartition('|')
+            if not scan_time or not raw_id.isdigit():
+                raise HTTPException(status_code=400, detail='cursor 格式应为 scan_time|id')
+            rows = fdao.get_page_after((scan_time, int(raw_id)), page_size=page_size)
+        else:
+            rows = fdao.get_page_after(None, page_size=page_size)
+        ids = [r['id'] for r in rows]
+        last = rows[-1] if rows else None
+        return {
+            'total': None, 'page': None, 'page_size': page_size,
+            'items': [_brief(r) for r in rows],
+            'next_cursor': f"{last['scan_time']}|{last['id']}" if last else None,
+            'tags': tdao.get_all_tags_by_file(ids),
+            'classifications': _serialize(cdao.get_by_file_ids(ids)),
         }
 
     # 标签/分类交集过滤

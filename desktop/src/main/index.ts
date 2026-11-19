@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, shell } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { apiGet } from './api'
@@ -45,6 +45,9 @@ if (!app.requestSingleInstanceLock()) {
 
     ipcMain.handle('app:health', () => getSidecarInfo())
     ipcMain.handle('api:get', (_event, requestPath: string) => apiGet(requestPath))
+    ipcMain.handle('shell:open', (_event, target: string) => shell.openPath(target))
+    ipcMain.handle('shell:reveal', (_event, target: string) => shell.showItemInFolder(target))
+    ipcMain.handle('clipboard:write', (_event, text: string) => clipboard.writeText(String(text)))
 
     win = createWindow()
 
@@ -60,7 +63,17 @@ if (!app.requestSingleInstanceLock()) {
     if (SHOT) {
       win.webContents.once('did-finish-load', async () => {
         win?.show()
-        await new Promise((r) => setTimeout(r, 2000))
+        await new Promise((r) => setTimeout(r, 1500))
+        if (process.argv.includes('--shot-files')) {
+          await win!.webContents.executeJavaScript(
+            `document.querySelector('[data-tab="files"]')?.click()`,
+          )
+          await new Promise((r) => setTimeout(r, 1500))
+          const perf = await win!.webContents.executeJavaScript(
+            `window.__scrollPerf ? window.__scrollPerf() : null`,
+          )
+          console.log(`[perf] ${JSON.stringify(perf)}`)
+        }
         const image = await win!.webContents.capturePage()
         fs.writeFileSync(SHOT, image.toPNG())
         console.log(`[shot] saved ${SHOT}`)

@@ -59,6 +59,40 @@ def test_scan_task_completes_and_events_stream(tmp_path):
         _teardown(path)
 
 
+def test_files_cursor_pagination_has_no_duplicates(tmp_path):
+    path = _prepare_db()
+    root = tmp_path / 'many'
+    root.mkdir()
+    for i in range(25):
+        (root / f'f{i:02d}.txt').write_bytes(b'x' * (i + 1))
+
+    try:
+        with TestClient(server.app) as client:
+            task_id = client.post(
+                '/api/scan/start',
+                json={'directory': str(root), 'compute_hash': False},
+            ).json()['task_id']
+            for _ in range(200):
+                if client.get(f'/api/tasks/{task_id}').json()['status'] != 'running':
+                    break
+                time.sleep(0.05)
+
+            ids, cursor = [], ''
+            for _ in range(10):
+                res = client.get('/api/files', params={'page_size': 10, 'cursor': cursor})
+                assert res.status_code == 200, res.text
+                body = res.json()
+                ids.extend(item['id'] for item in body['items'])
+                cursor = body['next_cursor']
+                if cursor is None:
+                    break
+
+            assert len(ids) == 25
+            assert len(set(ids)) == 25
+    finally:
+        _teardown(path)
+
+
 def test_thumb_returns_jpeg(tmp_path):
     from PIL import Image
 
