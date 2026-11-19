@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import AppButton from '../components/AppButton.vue'
 import DataTable, { type Column } from '../components/DataTable.vue'
 import { formatBytes, formatTime } from '../lib/format'
 
 const PAGE = 200
+const TEXT_EXT = /\.(txt|md|log|json|csv|py|js|ts|vue|ya?ml|ini|cfg|toml|sql|html|css|sh)$/i
 
 const COLUMNS: Column[] = [
   { key: 'file_name', title: '名称', width: 'minmax(200px, 1.4fr)' },
   { key: 'file_type', title: '类型', width: '72px' },
   { key: 'file_size', title: '大小', width: '88px', align: 'right' },
   { key: 'modify_time', title: '修改时间', width: '132px' },
-  { key: 'file_path', title: '路径', width: 'minmax(180px, 2fr)' },
+  { key: 'file_path', title: '路径', width: 'minmax(160px, 1.6fr)' },
 ]
 
 const TYPE_COLORS: Record<string, string> = {
@@ -26,8 +28,13 @@ const TYPE_NAMES: Record<string, string> = {
 const rows = ref<any[]>([])
 const loading = ref(false)
 const error = ref('')
-const nextCursor = ref<string | null>('') // '' 首页未加载，null 已到末页
+const nextCursor = ref<string | null>('')
 const menu = ref<{ x: number; y: number; row: any } | null>(null)
+
+const selected = ref<any | null>(null)
+const thumb = ref('')
+const snippet = ref('')
+const note = ref('')
 
 async function loadMore() {
   if (loading.value || nextCursor.value === null) return
@@ -43,6 +50,24 @@ async function loadMore() {
     nextCursor.value = null
   }
   loading.value = false
+}
+
+async function selectRow(row: any) {
+  selected.value = row
+  thumb.value = ''
+  snippet.value = ''
+  note.value = ''
+  if (row.file_type === 'image') {
+    const res = await window.api.thumb(row.file_path, 320)
+    if (res.ok) thumb.value = String(res.data)
+    else note.value = '缩略图生成失败'
+  } else if (TEXT_EXT.test(row.file_path)) {
+    const res = await window.api.readText(row.file_path)
+    if (res.ok) snippet.value = res.data || ''
+    else note.value = res.error || '读取失败'
+  } else {
+    note.value = '该类型暂不支持预览'
+  }
 }
 
 function openMenu(event: MouseEvent, row: any) {
@@ -73,36 +98,67 @@ onMounted(loadMore)
 
     <p v-if="error" class="error">加载失败：{{ error }}</p>
 
-    <DataTable
-      class="grow"
-      :rows="rows"
-      :columns="COLUMNS"
-      :loading="loading"
-      perf
-      empty-text="还没有扫描数据，先在扫描页建个索引"
-      @scroll-near-end="loadMore"
-      @row-dblclick="(row) => window.api.open(row.file_path)"
-      @row-contextmenu="({ event, row }) => openMenu(event, row)"
-    >
-      <template #cell-file_name="{ row }">
-        <span class="name">
-          <i class="dot" :style="{ background: TYPE_COLORS[row.file_type] || '#6b6b7b' }" />
-          {{ row.file_name }}
-        </span>
-      </template>
-      <template #cell-file_type="{ row }">
-        <span class="muted">{{ TYPE_NAMES[row.file_type] || row.file_type }}</span>
-      </template>
-      <template #cell-file_size="{ row }">
-        <span class="muted">{{ formatBytes(row.file_size) }}</span>
-      </template>
-      <template #cell-modify_time="{ row }">
-        <span class="muted">{{ formatTime(row.modify_time) }}</span>
-      </template>
-      <template #cell-file_path="{ row }">
-        <span class="path">{{ row.file_path }}</span>
-      </template>
-    </DataTable>
+    <div class="split">
+      <DataTable
+        class="grow"
+        :rows="rows"
+        :columns="COLUMNS"
+        :loading="loading"
+        :active-key="selected?.id ?? null"
+        perf
+        empty-text="还没有扫描数据，先在扫描页建个索引"
+        @row-click="selectRow"
+        @scroll-near-end="loadMore"
+        @row-dblclick="(row) => window.api.open(row.file_path)"
+        @row-contextmenu="({ event, row }) => openMenu(event, row)"
+      >
+        <template #cell-file_name="{ row }">
+          <span class="name">
+            <i class="dot" :style="{ background: TYPE_COLORS[row.file_type] || '#6b6b7b' }" />
+            {{ row.file_name }}
+          </span>
+        </template>
+        <template #cell-file_type="{ row }">
+          <span class="muted">{{ TYPE_NAMES[row.file_type] || row.file_type }}</span>
+        </template>
+        <template #cell-file_size="{ row }">
+          <span class="muted">{{ formatBytes(row.file_size) }}</span>
+        </template>
+        <template #cell-modify_time="{ row }">
+          <span class="muted">{{ formatTime(row.modify_time) }}</span>
+        </template>
+        <template #cell-file_path="{ row }">
+          <span class="path">{{ row.file_path }}</span>
+        </template>
+      </DataTable>
+
+      <aside class="preview">
+        <template v-if="selected">
+          <h2 :title="selected.file_name">{{ selected.file_name }}</h2>
+
+          <div class="media">
+            <img v-if="thumb" :src="thumb" alt="预览" />
+            <pre v-else-if="snippet">{{ snippet }}</pre>
+            <p v-else class="note">{{ note || '加载中…' }}</p>
+          </div>
+
+          <dl class="meta">
+            <dt>类型</dt><dd>{{ TYPE_NAMES[selected.file_type] || selected.file_type }}</dd>
+            <dt>大小</dt><dd>{{ formatBytes(selected.file_size) }}</dd>
+            <dt>修改</dt><dd>{{ formatTime(selected.modify_time) }}</dd>
+            <dt>路径</dt><dd class="path-cell">{{ selected.file_path }}</dd>
+          </dl>
+
+          <div class="actions">
+            <AppButton size="sm" @click="window.api.open(selected.file_path)">打开</AppButton>
+            <AppButton size="sm" variant="ghost" @click="window.api.reveal(selected.file_path)">
+              定位
+            </AppButton>
+          </div>
+        </template>
+        <p v-else class="note">选中一行查看预览</p>
+      </aside>
+    </div>
 
     <ul v-if="menu" class="menu" :style="{ left: `${menu.x}px`, top: `${menu.y}px` }" @click.stop>
       <li @click="runAction('open')">打开</li>
@@ -119,11 +175,63 @@ onMounted(loadMore)
   gap: var(--space-4);
   height: calc(100vh - 52px - var(--space-5) * 2);
 }
-.grow { flex: 1; min-height: 0; }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; }
 h1 { margin: 0; font-size: 20px; }
 .page-head p { margin: 2px 0 0; color: var(--dim); font-size: 12px; }
 .error { margin: 0; padding: 10px 12px; color: #fecaca; background: #3f1d1d; border-radius: var(--radius-sm); }
+
+.split { display: flex; gap: var(--space-4); flex: 1; min-height: 0; }
+.grow { flex: 1; min-width: 0; }
+
+.preview {
+  width: 280px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: auto;
+}
+.preview h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.media {
+  display: grid;
+  place-items: center;
+  min-height: 120px;
+  max-height: 220px;
+  background: #12162a;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: auto;
+}
+.media img { max-width: 100%; max-height: 218px; display: block; }
+.media pre {
+  margin: 0;
+  padding: 10px;
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.note { margin: 0; color: var(--dim); font-size: 12px; }
+.meta { display: grid; grid-template-columns: 40px 1fr; gap: 4px var(--space-2); margin: 0; font-size: 12px; }
+.meta dt { color: var(--dim); }
+.meta dd { margin: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+.path-cell { word-break: break-all; }
+.actions { display: flex; gap: var(--space-2); margin-top: auto; }
+
 .name { display: flex; align-items: center; gap: 8px; }
 .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
 .muted { color: var(--muted); font-size: 12px; }

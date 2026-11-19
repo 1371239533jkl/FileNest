@@ -1,7 +1,8 @@
 import { app, BrowserWindow, clipboard, ipcMain, shell } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
-import { apiGet } from './api'
+import { apiGet, apiThumb } from './api'
+import { readTextHead } from './files'
 import { getSidecarInfo, startSidecar, stopSidecar } from './sidecar'
 
 const SHOT = process.argv.find((arg) => arg.startsWith('--shot='))?.split('=')[1]
@@ -48,6 +49,8 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('shell:open', (_event, target: string) => shell.openPath(target))
     ipcMain.handle('shell:reveal', (_event, target: string) => shell.showItemInFolder(target))
     ipcMain.handle('clipboard:write', (_event, text: string) => clipboard.writeText(String(text)))
+    ipcMain.handle('api:thumb', (_event, target: string, size?: number) => apiThumb(target, size))
+    ipcMain.handle('file:readText', (_event, target: string) => readTextHead(target))
 
     win = createWindow()
 
@@ -72,10 +75,24 @@ if (!app.requestSingleInstanceLock()) {
             `document.querySelector('[data-tab="${tabArg}"]')?.click()`,
           )
           await new Promise((r) => setTimeout(r, 1500))
-          const perf = await win!.webContents.executeJavaScript(
-            `window.__scrollPerf ? window.__scrollPerf() : null`,
-          )
-          if (perf) console.log(`[perf] ${JSON.stringify(perf)}`)
+          const rowArg = process.argv
+            .find((arg) => arg.startsWith('--shot-row='))
+            ?.split('=')[1]
+          if (rowArg !== undefined) {
+            const needle = JSON.stringify(rowArg)
+            await win!.webContents.executeJavaScript(
+              `([...document.querySelectorAll('.item')]
+                 .find((el) => el.textContent.includes(${needle}))
+                 || document.querySelector('.item'))?.click()`,
+            )
+            await new Promise((r) => setTimeout(r, 900))
+          }
+          if (process.argv.includes('--shot-perf')) {
+            const perf = await win!.webContents.executeJavaScript(
+              `window.__scrollPerf ? window.__scrollPerf() : null`,
+            )
+            if (perf) console.log(`[perf] ${JSON.stringify(perf)}`)
+          }
         }
         const image = await win!.webContents.capturePage()
         fs.writeFileSync(SHOT, image.toPNG())

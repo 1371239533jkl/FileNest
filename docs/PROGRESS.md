@@ -1,6 +1,6 @@
 # 项目进度
 
-> 最后更新：2026-11-19　当前阶段：**P2（进行中）**　总体完成度：约 46%
+> 最后更新：2026-11-19　当前阶段：**P2（进行中）**　总体完成度：约 49%
 > 方案与验收标准见 `docs/REFACTOR_PLAN.md`；性能基线见 `docs/perf/BASELINE.md`。
 
 ## 一句话现状
@@ -13,7 +13,7 @@ P0 全部走完（度量、骨架、sidecar 握手、打包，含一次体积决
 |------|------|--------|------|
 | P0 度量与骨架 | ✅ 完成 | 100% | NSIS 安装包未产出（网络阻塞），其余达成 |
 | P1 服务化与数据治理 | 🟡 收尾 | 约 85% | 数据层 + 计算内核 + 扫描服务 + 任务/SSE + 缩略图/退出/token 已落地；剩 watcher 等按需项 |
-| P2 渲染骨架与设计系统 | 🟡 进行中 | 约 40% | 壳/设计 token/仪表盘/文件表格 + DataTable 组件 + 组件总览页 |
+| P2 渲染骨架与设计系统 | 🟡 进行中 | 约 50% | 仪表盘/文件表格/Vue 组件库/预览面板（图片+文本） |
 | P3 页面迁移 | ⬜ 未开始 | 0% | 依赖 P2 |
 | P4 收尾与发布 | ⬜ 未开始 | 0% | — |
 
@@ -37,6 +37,7 @@ P0 全部走完（度量、骨架、sidecar 握手、打包，含一次体积决
 | T2-2 | 设计 token + 基础组件 + 仪表盘 | `renderer/styles`、`components`、`pages/DashboardPage.vue` | 1100 文件真实数据渲染，截图见 `docs/screenshot_v3_dashboard.png` |
 | T2-3 | 文件表格：虚拟滚动 + keyset 分页 + 右键菜单 | `renderer/pages/FilesPage.vue`、`web_api.py` | 2.2 万行滚动 p95 5.8ms/max 6.4ms；分页不重不漏（测试覆盖）；截图 `docs/screenshot_v3_files.png` |
 | T2-4 | 抽出 DataTable / AppButton + 组件总览页 | `components/DataTable.vue`、`pages/Styleguide.vue` | 表格三种状态可预览；重构后性能复测 p95 6.2ms；截图 `docs/screenshot_v3_styleguide.png` |
+| T2-5 | 预览面板：图片缩略图 + 文本头部 + 元信息 | `main/api.ts`、`main/files.ts`、`pages/FilesPage.vue` | 图片经 `/api/thumb` 返回 data URI；文本限 8KB 且仅白名单扩展名；截图 `docs/screenshot_v3_preview.png` |
 
 ## 关键数字（实测，Windows 11 / 12 核 / Python 3.14.9）
 
@@ -51,8 +52,8 @@ P0 全部走完（度量、骨架、sidecar 握手、打包，含一次体积决
 
 ## 下一步（按顺序）
 
-1. **预览面板 + 缩略图**：接入 `/api/thumb`，右侧预览图片/文本/PDF 首页
-2. **文件搜索页**：多条件筛选 + 正文检索 + 空状态
+1. **文件搜索页**：多条件筛选（名称/类型/大小/时间）+ 正文检索 + 空状态
+2. **扫描页**：目录选择 + `scan/start` 任务进度（SSE）+ 取消
 3. 之后：AI 对话（流式 + 引用），再接扫描/重复/历史/标签/设置
 4. **T1-1b（按需）**：`file_watcher` 等 Qt 模块仅在需要同等能力时才改
 
@@ -63,7 +64,7 @@ P0 全部走完（度量、骨架、sidecar 握手、打包，含一次体积决
 | 1 | NSIS 安装包未产出（electron-builder 下载二进制卡住） | 安装体积只有估算值 | 换网络或手动放缓存后补测 |
 | 2 | ADR-001～013 只写在方案附录，没有独立文件 | 评审时缺决策留痕 | P4 前补齐 `docs/adr/` |
 | 3 | `tests/` 中 11 个文件仍 import PyQt6 | 测试跑不全 | T1-1 完成后恢复 |
-| 4 | 文件表格未做缩略图与预览面板 | 图片/PDF 无法在列表侧预览 | 下段接 `/api/thumb` + 右侧预览 |
+| 4 | 预览仅支持图片与纯文本，PDF/Office 未做 | 文档类只能看元数据 | 需要时用 PyMuPDF 渲染首页（服务端已装） |
 | 5 | `content_indexer` 仍全表载入后切片 | 大库索引启动慢 | T1-4 剩余项 |
 | 6 | 缩略图无磁盘/内存缓存，重复请求重复解码 | 列表滚动时 CPU 偏高 | P3 接入时加 LRU |
 | 7 | `scan_time` 为 NULL 的旧数据会被 keyset 跳过 | 可能漏行 | 接 UI 前跑一次全库检查 |

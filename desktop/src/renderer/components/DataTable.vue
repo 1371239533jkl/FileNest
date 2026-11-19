@@ -17,11 +17,16 @@ const props = withDefaults(
     loading?: boolean
     emptyText?: string
     perf?: boolean
+    activeKey?: string | number | null
   }>(),
-  { rowKey: 'id', rowHeight: 44, loading: false, emptyText: '暂无数据', perf: false },
+  {
+    rowKey: 'id', rowHeight: 44, loading: false,
+    emptyText: '暂无数据', perf: false, activeKey: null,
+  },
 )
 
 const emit = defineEmits<{
+  (e: 'row-click', row: any): void
   (e: 'row-dblclick', row: any): void
   (e: 'row-contextmenu', payload: { event: MouseEvent; row: any }): void
   (e: 'scroll-near-end'): void
@@ -105,11 +110,13 @@ onMounted(() => {
           v-for="(row, index) in visible"
           :key="row[rowKey]"
           class="row item"
+          :class="{ active: activeKey !== null && row[rowKey] === activeKey }"
           :style="{
             gridTemplateColumns: template,
             height: `${rowHeight}px`,
             transform: `translateY(${(startIndex + index) * rowHeight}px)`,
           }"
+          @click="emit('row-click', row)"
           @dblclick="emit('row-dblclick', row)"
           @contextmenu="emit('row-contextmenu', { event: $event, row })"
         >
@@ -167,6 +174,7 @@ onMounted(() => {
   will-change: transform;
 }
 .item:hover { background: #202537; }
+.item.active { background: #24304d; box-shadow: inset 2px 0 0 var(--primary); }
 .cell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .state {
   display: grid;

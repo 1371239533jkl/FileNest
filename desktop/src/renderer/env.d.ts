@@ -23,6 +23,8 @@ declare global {
       open: (path: string) => Promise<string>
       reveal: (path: string) => Promise<void>
       copy: (text: string) => Promise<void>
+      thumb: (path: string, size?: number) => Promise<ApiResult>
+      readText: (path: string) => Promise<{ ok: boolean; data?: string; error?: string }>
     }
   }
 }
