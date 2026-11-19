@@ -88,3 +88,6 @@ desktop/packaging/*.log
 !.codebuddy/
 !.codebuddy/rules/
 !.codebuddy/rules/**
+
+# root-temp-log: 根目录临时日志
+/*.log
