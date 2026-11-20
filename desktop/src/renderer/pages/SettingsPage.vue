@@ -88,6 +88,10 @@ function onTemplateChange(event: Event) {
   applyTemplate((event.target as HTMLSelectElement).value)
 }
 
+function openDataDir() {
+  void window.api.openDataDir()
+}
+
 function startCreate() {
   editing.value = true
   form.value = {
@@ -248,6 +252,9 @@ onMounted(load)
     </Panel>
 
     <Panel title="运行信息">
+      <template #actions>
+        <AppButton size="sm" variant="ghost" @click="openDataDir">打开数据目录</AppButton>
+      </template>
       <dl class="info">
         <dt>应用版本</dt><dd>{{ version }}</dd>
         <dt>sidecar 端口</dt><dd>{{ port || '—' }}</dd>

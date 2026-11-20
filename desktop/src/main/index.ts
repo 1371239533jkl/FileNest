@@ -53,6 +53,7 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('app:health', () => getSidecarInfo())
     ipcMain.handle('api:get', (_event, requestPath: string) => apiGet(requestPath))
     ipcMain.handle('shell:open', (_event, target: string) => shell.openPath(target))
+    ipcMain.handle('shell:openDataDir', () => shell.openPath(app.getPath('userData')))
     ipcMain.handle('shell:openExternal', (_event, url: string) => {
       if (!/^https?:\/\//i.test(url)) return false
       void shell.openExternal(url)

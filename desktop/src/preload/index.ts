@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('api', {
   del: (path: string) => ipcRenderer.invoke('api:delete', path),
   open: (path: string) => ipcRenderer.invoke('shell:open', path),
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
+  openDataDir: () => ipcRenderer.invoke('shell:openDataDir'),
   reveal: (path: string) => ipcRenderer.invoke('shell:reveal', path),
   copy: (text: string) => ipcRenderer.invoke('clipboard:write', text),
   thumb: (path: string, size?: number) => ipcRenderer.invoke('api:thumb', path, size),

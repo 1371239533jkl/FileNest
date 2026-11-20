@@ -24,6 +24,7 @@ declare global {
       del: (path: string) => Promise<ApiResult>
       open: (path: string) => Promise<string>
       openExternal: (url: string) => Promise<boolean>
+      openDataDir: () => Promise<string>
       chatStream: (message: string) => Promise<{ ok: boolean; error?: string }>
       onChatEvent: (handler: (payload: any) => void) => () => void
       reveal: (path: string) => Promise<void>

@@ -276,8 +276,38 @@ class DBManager:
         """)
         conn.commit()
 
+    def _backup_before_init(self):
+        """初始化前做一次按日备份，最多留 3 份，供误操作/升级回滚使用。
+
+        用 sqlite3 的在线 backup 接口而不是直接复制文件：WAL 模式下直接拷 .db
+        可能漏掉还在 -wal 里的已提交数据。
+        """
+        source = self.db_path
+        if not os.path.exists(source) or os.path.getsize(source) == 0:
+            return
+        target = f'{source}.bak-{datetime.now().strftime("%Y%m%d")}'
+        if os.path.exists(target):
+            return
+        try:
+            with sqlite3.connect(source) as src, sqlite3.connect(target) as dst:
+                src.backup(dst)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f'数据库备份失败（不影响启动）: {exc}')
+            return
+        folder = os.path.dirname(source) or '.'
+        prefix = os.path.basename(source) + '.bak-'
+        backups = sorted(
+            os.path.join(folder, name) for name in os.listdir(folder)
+            if name.startswith(prefix))
+        for stale in backups[:-3]:
+            try:
+                os.remove(stale)
+            except OSError:
+                pass
+
     def init_database(self):
         """创建数据库表结构（幂等：CREATE TABLE IF NOT EXISTS）"""
+        self._backup_before_init()
         conn = self._get_local_connection()
 
         conn.executescript("""
