@@ -15,6 +15,7 @@ const GET_ALLOWED = [
   /^\/api\/classification(\?|$)/,
   /^\/api\/cleanup\/(analyze|exclusions)(\?|$)/,
   /^\/api\/ai\/insights(\?|$)/,
+  /^\/api\/timeline(\?|$)/,
 ]
 const POST_ALLOWED = [
   /^\/api\/scan\/start$/,

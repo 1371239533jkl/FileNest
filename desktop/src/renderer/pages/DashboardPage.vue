@@ -33,7 +33,7 @@ const typeItems = computed(() =>
   })),
 )
 
-const activities = computed(() => (data.value?.activities as any[]) || [])
+const activities = computed(() => (data.value?.recent_activities as any[]) || [])
 
 onMounted(load)
 </script>

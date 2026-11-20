@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    name: 后端测试
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: 安装依赖
+        run: pip install -r requirements.txt pytest
+      - name: 运行不依赖 PyQt6 的测试
+        # 其余测试仍 import PyQt6（技术债 3），在 T1-1 完成后并入
+        run: >
+          python -m pytest -q
+          tests/test_api_tasks.py
+          tests/test_scan_service.py
+          tests/test_scan_engine.py
+          tests/test_data_layer.py
+          tests/test_task_runner.py
+
+  desktop:
+    name: 前端构建
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: 首屏体积门禁
+        shell: pwsh
+        run: |
+          $main = Get-ChildItem dist/renderer/assets/*.js | Sort-Object Length -Descending | Select-Object -First 1
+          $kb = [math]::Round($main.Length / 1KB, 1)
+          Write-Host "主包 $kb KB"
+          if ($main.Length -gt 400KB) { throw "主包超过 400KB 预算：$kb KB" }
