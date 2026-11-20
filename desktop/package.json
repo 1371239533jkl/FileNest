@@ -31,7 +31,16 @@
       }
     ],
     "win": {
-      "target": "dir"
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "FileNest"
     }
   },
   "devDependencies": {

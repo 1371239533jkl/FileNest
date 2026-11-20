@@ -1,6 +1,6 @@
 # 项目进度
 
-> 最后更新：2026-11-20　当前阶段：**P3/P4 并行**　总体完成度：约 93%
+> 最后更新：2026-11-20　当前阶段：**P3/P4 并行**　总体完成度：约 95%
 > 方案与验收标准见 `docs/REFACTOR_PLAN.md`；性能基线见 `docs/perf/BASELINE.md`。
 
 ## 一句话现状
@@ -15,7 +15,7 @@ P0 全部走完（度量、骨架、sidecar 握手、打包，含一次体积决
 | P1 服务化与数据治理 | 🟡 收尾 | 约 85% | 数据层 + 计算内核 + 扫描服务 + 任务/SSE + 缩略图/退出/token 已落地；剩 watcher 等按需项 |
 | P2 渲染骨架与设计系统 | ✅ 完成 | 100% | 7 个页面 + 组件库 + 截图回归 |
 | P3 页面迁移 | 🟡 进行中 | 约 62% | AI 对话/分类/清理/时间线已完成；归档、工作区未做 |
-| P4 收尾（工程化） | 🟡 起步 | 约 25% | 侧栏分组导航 + 最小 CI 已落地；安装包与灰度未做 |
+| P4 收尾（工程化） | 🟡 进行中 | 约 55% | 侧栏导航 + CI + NSIS 安装包已落地；灰度与回滚预案未做 |
 | P4 收尾与发布 | ⬜ 未开始 | 0% | — |
 
 ## 已完成（可验收）
@@ -27,7 +27,7 @@ P0 全部走完（度量、骨架、sidecar 握手、打包，含一次体积决
 | T0-3 | 基线采集与报告 | `docs/perf/BASELINE.md`、`bench/results/baseline-1k.json` | 已入库（含一次口径修正） |
 | T0-4 | Electron + Vue 3 + TS 骨架 | `desktop/` | `npm run build` 通过 |
 | T0-5 | sidecar 握手（随机端口 / health / 杀进程树） | `desktop/src/main/sidecar.ts` | `npm run smoke` → PASS，无孤儿进程 |
-| T0-6 | 打包链路（PyInstaller onedir + electron-builder） | `desktop/packaging/build-sidecar.cmd`、`package.json` | 未压缩 539MB；`FileNest.exe --smoke` 退出码 0 |
+| T0-6 | 打包链路（PyInstaller onedir + electron-builder） | `desktop/packaging/build-sidecar.cmd`、`package.json` | **NSIS 安装包 204.1MB**（预算 ≤300MB）；sidecar 182.1MB；`release\win-unpacked\FileNest.exe --smoke` 退出码 0、无残留进程 |
 | — | 体积决策：接受 Electron 成本，预算改 ≤300MB | ADR-013 | 已确认 |
 | T1-4a | DB 事务上下文 + keyset 分页 + 复合索引 | `database/db_manager.py`、`models.py` | 4 个测试通过、冒烟通过 |
 | T1-6 | 计算内核：单次 stat 遍历 + 多进程哈希 | `core/scan_engine.py`、`bench/run_compute.py` | 遍历 1.64×、哈希冷盘 14.2×/热缓存 2.2×，9 个测试通过 |
@@ -57,6 +57,7 @@ P0 全部走完（度量、骨架、sidecar 握手、打包，含一次体积决
 | T3-9 | 时间线页：操作/外部事件统一视图 | `pages/TimelinePage.vue` | 按天分组、模式切换、类型筛选；实测 3 条删除记录（原路径 → 回收区路径）；截图 `docs/screenshot_v3_timeline.png` |
 | T4-1 | 侧栏分组导航（替代顶部 12 个标签） | `renderer/App.vue` | 五组：概览/文件/智能/记录/系统；「组件」页仅开发构建可见；截图 `docs/screenshot_v3_dashboard.png` |
 | T4-2 | 最小 CI（后端测试 + 前端构建 + 体积门禁） | `.github/workflows/ci.yml` | Windows runner；跑 5 个不依赖 PyQt6 的测试文件；主包 > 400KB 直接失败 |
+| T4-3 | 打包链路验证（PyInstaller onedir + electron-builder dir） | `desktop/packaging`、`desktop/package.json` | sidecar 182.1MB；`release\win-unpacked\FileNest.exe --smoke` 退出码 0，残留进程 0（打包态下 sidecar 路径与 Job Object 清理均正常） |
 
 ## 关键数字（实测，Windows 11 / 12 核 / Python 3.14.9）
 
@@ -82,7 +83,7 @@ P0 全部走完（度量、骨架、sidecar 握手、打包，含一次体积决
 
 | # | 问题 | 影响 | 计划 |
 |---|------|------|------|
-| 1 | NSIS 安装包未产出（electron-builder 下载二进制卡住） | 安装体积只有估算值 | 换网络或手动放缓存后补测 |
+| 1 | sidecar 里 pymupdf 独占 93.2MB（超过一半），numpy 26MB | 安装包 204MB，进一步压缩空间有限 | 如需瘦身，把 PDF 解析做成可选组件按需下载 |
 | 2 | ADR-001～013 只写在方案附录，没有独立文件 | 评审时缺决策留痕 | P4 前补齐 `docs/adr/` |
 | 3 | `tests/` 中 11 个文件仍 import PyQt6 | 测试跑不全 | T1-1 完成后恢复 |
 | 4 | 预览仅支持图片与纯文本，PDF/Office 未做 | 文档类只能看元数据 | 需要时用 PyMuPDF 渲染首页（服务端已装） |
@@ -158,3 +159,4 @@ cd desktop && npm run build && npm run smoke
 | 2026-11-19 | 关闭 23 | 新增 `/api/dedup/start` 与重复页「检测重复」按钮，空页不再无路可走 |
 | 2026-11-20 | 关闭 30 | 用真实模型（火山方舟 deepseek-v4.1-flash）验证流式渲染与上下文增强 |
 | 2026-11-20 | 关闭 11/15/37 | 组件页改为仅开发可见；新增最小 CI（含体积门禁）；顶部导航改侧栏分组 |
+| 2026-11-20 | 关闭 1 | NSIS 安装包产出（204.1MB），打包态冒烟通过；体积问题转为新条目 |
