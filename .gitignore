@@ -91,3 +91,6 @@ desktop/packaging/*.log
 
 # root-temp-log: 根目录临时日志
 /*.log
+
+# 毕设申报材料
+!docs/毕设选题申报.md
